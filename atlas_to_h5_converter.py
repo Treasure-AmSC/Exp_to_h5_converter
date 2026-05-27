@@ -1,67 +1,109 @@
 #!/usr/bin/env python3
 """
-ATLAS DAOD_PHYSLITE to HDF5 Converter  (cross-experiment edition)
-=================================================================
+ATLAS DAOD_PHYSLITE → HDF5 Converter  (v2.1 — cross-experiment edition)
+========================================================================
 
-Produces two layers in every HDF5 file:
+Converts ATLAS Run 2 Open Data (PHYSLITE format) into analysis-ready HDF5
+files for the TREASURE foundation model pipeline.
 
-  /common/    — variables defined identically across ATLAS and CMS.
-                A CMS NanoAOD converter should fill the same keys.
+HDF5 Layout
+-----------
+  /common/    — Cross-experiment variables (same keys for ATLAS and CMS).
                 All energies/momenta in GeV, angles in radians.
+  /atlas/     — ATLAS-specific variables (ID flags, b-tagging, etc.).
+  /truth/     — MC truth particles (electrons, muons, photons, taus,
+                bosons, jets, MET). Only present for simulation.
+  /metadata   — HDF5 group attributes: experiment, DSID, process name,
+                cross-section, selection cuts, provenance.
 
-  /atlas/     — ATLAS-specific variables kept for ATLAS-only studies.
-                Do NOT use these in cross-experiment training without
-                explicit experiment conditioning.
+Schema
+------
+  common/electrons : pt, eta, phi, charge, trk_iso03, mask, n
+  common/muons     : pt, eta, phi, charge, trk_iso03, mask, n
+  common/taus      : pt, eta, phi, charge, is_1prong, mask, n
+  common/photons   : pt, eta, phi, trk_iso03, mask, n
+  common/jets      : pt, eta, phi, mass, n_trk, mask, n
+  common/tracks    : pt, eta, phi, d0, z0, mask, n
+  common/met       : pt, phi, sumet                    (scalar per event)
+  common/event     : pvx, pvy, pvz, mu, experiment_id, is_simulation
 
-  /metadata   — HDF5 group attributes (no datasets).  Covers:
-                  experiment, format_version, input_file, n_events,
-                  git_hash (if available), pt_cuts, max_objects,
-                  common_iso_cone, common_iso_pt_floor_gev,
-                  common_iso_z0sintheta_cut_mm
+  atlas/electrons  : LHLoose, LHMedium, LHTight, topoetcone20, ptvarcone30, mass
+  atlas/muons      : quality, muonType, passIDCuts, passPresel,
+                     topoetcone20, ptvarcone30
+  atlas/taus       : NNDecayMode, RNNJetScore, RNNEleScore,
+                     EleRNNLoose/Medium/Tight_v1
+  atlas/photons    : isLoose, isTight, isCleaning, author,
+                     topoetcone20, topoetcone40, ptcone20
+  atlas/jets       : DL1d_pb/pc/pu, GN2_pb/pc/pu, QG_nTracks/Width/C1
+  atlas/tracks     : qOverP, chiSquared, nDoF
+  atlas/event      : event_number, run_number, mcChannelNumber
 
-Schema summary
---------------
-common/electrons : pt, eta, phi, charge, trk_iso03, mask, n
-common/muons     : pt, eta, phi, charge, trk_iso03, mask, n
-common/taus      : pt, eta, phi, charge, is_1prong, mask, n
-common/photons   : pt, eta, phi, trk_iso03, mask, n
-common/jets      : pt, eta, phi, mass, n_trk, mask, n
-common/tracks    : pt, eta, phi, d0, z0, mask, n
-common/met       : pt, phi, sumet          (scalar per event)
-common/event     : pvx, pvy, pvz, mu, experiment_id (0=ATLAS, 1=CMS),
-                   is_simulation (1=MC, 0=data)
+  truth/electrons  : pt, eta, phi, mass, pdgId, status, n, mask
+  truth/muons      : pt, eta, phi, mass, pdgId, status, n, mask
+  truth/photons    : pt, eta, phi, mass, pdgId, status, n, mask
+  truth/taus       : pt, eta, phi, mass, pdgId, status, n, mask
+  truth/bosons     : pt, eta, phi, mass, pdgId, status, n, mask  (H, Z, W)
+  truth/jets       : pt, eta, phi, mass, n, mask   (AntiKt4TruthDressedWZ)
+  truth/met        : pt, phi, sumet
 
-  mask  — boolean array shape (n_events, max_objects).  True = real object,
-           False = zero-padding.  Required because events have variable object
-           multiplicity but arrays are fixed-size.  Feed directly to
-           transformer attention_mask or use to zero-out padded slots in loss.
-           n (= n_electrons, n_jets, …) tells you how many True slots there are.
+Object Selection (mimicking H→ZZ→4ℓ analysis)
+----------------------------------------------
+  Electrons:
+    - pT > 7 GeV
+    - LH Loose ID (DFCommonElectronsLHLoose)
+    - Author == 1 (single-track) or 16 (forward)
+    - Object Quality: (OQ & 1446) == 0
+    - |η| < 2.47
+    - |z0·sinθ| < 0.5 mm
 
-atlas/electrons  : LHLoose, LHMedium, LHTight, topoetcone20, ptvarcone30, mass
-atlas/muons      : quality, muonType, passIDCuts, passPresel,
-                   topoetcone20, ptvarcone30
-atlas/taus       : NNDecayMode, RNNJetScore,
-                   RNNEleScore, EleRNNLoose/Medium/Tight_v1
-atlas/photons    : isLoose, isTight, isCleaning, author,  (no isMedium in PHYSLITE)
-                   topoetcone20, topoetcone40, ptcone20
-atlas/jets       : DL1d_pb, DL1d_pc, DL1d_pu,
-                   GN2_pb,  GN2_pc,  GN2_pu,
-                   QG_nTracks, QG_tracksWidth, QG_tracksC1
-atlas/tracks     : qOverP, chiSquared, nDoF
-atlas/event      : event_number, run_number, mcChannelNumber
+  Muons:
+    - pT > 5 GeV  (calo-tagged: pT > 15 GeV)
+    - DFCommonMuonPassPreselection (standard ATLAS muon preselection)
+    - |η| < 2.7
+    - Combined + CaloTagged: |d0| < 3 mm, |z0·sinθ| < 3 mm
+    - StandAlone: no impact parameter cut
 
-Isolation definition (common/*/trk_iso03)
------------------------------------------
-  I_trk = sum_pT(tracks, ΔR < 0.3, pT > ISO_PT_FLOOR,
-                 |z0·sinθ| < ISO_Z0ST_CUT w.r.t. PV)
-        / pT(object)
+  Photons:
+    - pT > 10 GeV
+    - DFCommonPhotonsIsEMLoose
 
-  where ISO_PT_FLOOR  = 0.5 GeV  (500 MeV)
-        ISO_Z0ST_CUT  = 3.0 mm
+  Taus:
+    - pT > 20 GeV
+    - RNNJetScore > 0.01
 
-  CMS equivalent: computed from PackedCandidates (charged, PV-associated)
-  with the same cone and pT floor.  Distributions will differ due to
-  detector geometry; use experiment_id as a conditioning token.
+  Jets:
+    - pT > 30 GeV
+    - |η| < 4.5
+    - DFCommonJets_jetClean_LooseBad (standard ATLAS Loose jet cleaning)
+
+  Tracks:
+    - pT > 500 MeV
+    - |η| < 2.5
+    - |d0| < 2 mm
+    - |z0·sinθ| < 3 mm
+
+  All cuts are configurable via PhysicsObjectConfig.
+
+Isolation (common/*/trk_iso03)
+------------------------------
+  I_trk = sum_pT(tracks, ΔR < 0.3, pT > 0.5 GeV, |z0·sinθ| < 3 mm) / pT
+  Computed per-object from InDetTrackParticles.
+
+Metadata (/metadata attrs)
+--------------------------
+  converter_version, converter_changelog, experiment, experiment_id,
+  input_file, n_events, DSID, process name, generator, cross-section (pb),
+  filter efficiency, k-factor, √s, data-taking year, MC campaign,
+  license, DOI, citation.  All selection cuts recorded for reproducibility.
+  Uses atlasopenmagic package if installed, else hardcoded lookup table.
+
+References
+----------
+  - ATLAS Open Data: https://opendata.atlas.cern
+  - PHYSLITE format: Eur. Phys. J. C 82 (2022) 105
+  - Jet cleaning: Eur. Phys. J. C 81 (2021) 689 [arXiv:2007.02645]
+  - Muon selection: Eur. Phys. J. C 81 (2021) 578 [arXiv:2012.00578]
+  - Electron ID: Eur. Phys. J. C 79 (2019) 639 [arXiv:1902.04655]
 """
 
 import numpy as np
@@ -74,14 +116,21 @@ from typing import Dict, List, Optional
 import logging
 from dataclasses import dataclass, field
 import json
-import subprocess
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-FORMAT_VERSION = "2.0.0"
+CONVERTER_VERSION = "2.1.0"
 EXPERIMENT_ID  = 0          # 0 = ATLAS, 1 = CMS
+CONVERTER_CHANGELOG = {
+    "2.1.0": "Add truth particles, CERN Open Data metadata, HZZ-style quality cuts, "
+             "jet LooseBad cleaning, muon passPresel, electron OQ/author/z0sinθ, "
+             "production versioning",
+    "2.0.0": "Cross-experiment format (common/atlas split), charge for e/μ/τ, "
+             "trk_iso03, muonType, NNDecayMode, is_1prong",
+    "1.0.0": "Initial format: flat H5, MeV units, no quality cuts",
+}
 
 # ── CERN Open Data metadata ──────────────────────────────────────────────────
 
@@ -202,27 +251,36 @@ class PhysicsObjectConfig:
     muon_pt_cut:     float = 5_000   # MeV
     photon_pt_cut:   float = 10_000  # MeV
     tau_pt_cut:      float = 20_000  # MeV
-    jet_pt_cut:      float = 20_000  # MeV
+    jet_pt_cut:      float = 30_000  # MeV  (HZZ default: 30 GeV)
     track_pt_cut:    float = 500     # MeV  (= ISO_PT_FLOOR so tracks used for iso are kept)
     max_objects:     int   = 20
     max_tracks:      int   = 50
 
-    # ── Quality selections (loose by default) ────────────────────────
-    # Electrons: require LHLoose identification
+    # ── Quality selections (mimicking H→ZZ→4ℓ analysis) ────────────
+    # Electrons: require LHLoose, author 1 or 16, |eta_cl| < 2.47,
+    #            OQ clean, |z0*sinθ| < 0.5 mm
     electron_require_loose: bool = True
+    electron_eta_cut: float = 2.47      # |eta_cluster|
+    electron_z0sintheta_cut: float = 0.5  # mm
+    electron_require_author: bool = True  # author == 1 or 16
+    electron_require_oq: bool = True      # (OQ & 1446) == 0
 
-    # Muons: require quality <= Medium (0=Tight, 1=Medium, 2=Loose)
-    # and |eta| < 2.7
-    muon_max_quality: int = 2   # 0=Tight, 1=Medium, 2=Loose; 3=VeryLoose; set 99 to disable
+    # Muons: use DFCommonMuonPassPreselection (standard ATLAS preselection),
+    #        |eta| < 2.7, loose impact parameter cuts
+    muon_max_quality: int = 99     # disabled — use passPresel instead
+    muon_require_presel: bool = True  # DFCommonMuonPassPreselection
     muon_eta_cut: float = 2.7
+    muon_d0_cut: float = 3.0           # mm (looser than HZZ's 1 mm)
+    muon_z0sintheta_cut: float = 3.0   # mm (looser than HZZ's 0.5 mm)
+    muon_calo_pt_cut: float = 15_000   # MeV — higher pT for calo-tagged muons
 
-    # Photons: require isLoose (DFCommonPhotonsIsEMLoose)
+    # Photons: require isLoose
     photon_require_loose: bool = True
 
     # Taus: require RNNJetScore > loose WP (~0.01) — removes QCD fakes
     tau_rnn_jet_cut: float = 0.01  # set 0 to disable
 
-    # Jets: require |eta| < 4.5, basic cleaning
+    # Jets: require |eta| < 4.5, LooseBad cleaning, pT > 30 GeV (HZZ default)
     jet_eta_cut: float = 4.5
     jet_clean_loose: bool = True     # require DFCommonJets_jetClean_LooseBad
 
@@ -245,6 +303,12 @@ ELECTRON_BRANCHES = [
     "AnalysisElectronsAuxDyn.DFCommonElectronsLHLoose",
     "AnalysisElectronsAuxDyn.DFCommonElectronsLHMedium",
     "AnalysisElectronsAuxDyn.DFCommonElectronsLHTight",
+    # HZZ quality cuts
+    "AnalysisElectronsAuxDyn.author",
+    "AnalysisElectronsAuxDyn.OQ",
+    # Track info for z0*sinθ cut
+    "AnalysisElectronsAuxDyn.z0",
+    "AnalysisElectronsAuxDyn.z0sinTheta",
 ]
 
 MUON_BRANCHES = [
@@ -258,6 +322,9 @@ MUON_BRANCHES = [
     "AnalysisMuonsAuxDyn.DFCommonMuonPassPreselection",
     "AnalysisMuonsAuxDyn.ptvarcone30",
     "AnalysisMuonsAuxDyn.topoetcone20",
+    # HZZ impact parameter cuts
+    "AnalysisMuonsAuxDyn.d0",
+    "AnalysisMuonsAuxDyn.z0sinTheta",
 ]
 
 PHOTON_BRANCHES = [
@@ -320,6 +387,64 @@ TRACK_BRANCHES = [
     "InDetTrackParticlesAuxDyn.numberDoF",
 ]
 
+# ── Truth branches (MC only) ──────────────────────────────────────────────
+TRUTH_ELECTRON_BRANCHES = [
+    "TruthElectronsAuxDyn.pt",
+    "TruthElectronsAuxDyn.eta",
+    "TruthElectronsAuxDyn.phi",
+    "TruthElectronsAuxDyn.m",
+    "TruthElectronsAuxDyn.pdgId",
+    "TruthElectronsAuxDyn.status",
+    "TruthElectronsAuxDyn.barcode",
+]
+TRUTH_MUON_BRANCHES = [
+    "TruthMuonsAuxDyn.pt",
+    "TruthMuonsAuxDyn.eta",
+    "TruthMuonsAuxDyn.phi",
+    "TruthMuonsAuxDyn.m",
+    "TruthMuonsAuxDyn.pdgId",
+    "TruthMuonsAuxDyn.status",
+    "TruthMuonsAuxDyn.barcode",
+]
+TRUTH_PHOTON_BRANCHES = [
+    "TruthPhotonsAuxDyn.pt",
+    "TruthPhotonsAuxDyn.eta",
+    "TruthPhotonsAuxDyn.phi",
+    "TruthPhotonsAuxDyn.m",
+    "TruthPhotonsAuxDyn.pdgId",
+    "TruthPhotonsAuxDyn.status",
+    "TruthPhotonsAuxDyn.barcode",
+]
+TRUTH_TAU_BRANCHES = [
+    "TruthTausAuxDyn.pt",
+    "TruthTausAuxDyn.eta",
+    "TruthTausAuxDyn.phi",
+    "TruthTausAuxDyn.m",
+    "TruthTausAuxDyn.pdgId",
+    "TruthTausAuxDyn.status",
+    "TruthTausAuxDyn.barcode",
+]
+TRUTH_BOSON_BRANCHES = [
+    "TruthBosonAuxDyn.pt",
+    "TruthBosonAuxDyn.eta",
+    "TruthBosonAuxDyn.phi",
+    "TruthBosonAuxDyn.m",
+    "TruthBosonAuxDyn.pdgId",
+    "TruthBosonAuxDyn.status",
+    "TruthBosonAuxDyn.barcode",
+]
+TRUTH_JET_BRANCHES = [
+    "AntiKt4TruthDressedWZJetsAuxDyn.pt",
+    "AntiKt4TruthDressedWZJetsAuxDyn.eta",
+    "AntiKt4TruthDressedWZJetsAuxDyn.phi",
+    "AntiKt4TruthDressedWZJetsAuxDyn.m",
+]
+TRUTH_MET_BRANCHES = [
+    "MET_TruthAuxDyn.mpx",
+    "MET_TruthAuxDyn.mpy",
+    "MET_TruthAuxDyn.sumet",
+]
+
 MET_BRANCHES = [
     "MET_Core_AnalysisMETAuxDyn.mpx",
     "MET_Core_AnalysisMETAuxDyn.mpy",
@@ -354,16 +479,6 @@ def _get_available(tree, branch_list):
     if missing:
         logger.debug(f"Branches not found: {missing}")
     return avail
-
-
-def _git_hash() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        return "unknown"
 
 
 def _compute_track_iso(
@@ -429,6 +544,16 @@ class DAOD_PHYSLITE_Converter:
                    MET_BRANCHES, EVENT_BRANCHES, VERTEX_BRANCHES]:
             all_branches.extend(_get_available(tree, bl))
 
+        # Truth branches (MC only — silently skip if not found)
+        truth_branch_lists = [
+            TRUTH_ELECTRON_BRANCHES, TRUTH_MUON_BRANCHES,
+            TRUTH_PHOTON_BRANCHES, TRUTH_TAU_BRANCHES,
+            TRUTH_BOSON_BRANCHES, TRUTH_JET_BRANCHES,
+            TRUTH_MET_BRANCHES,
+        ]
+        for bl in truth_branch_lists:
+            all_branches.extend(_get_available(tree, bl))
+
         events = tree.arrays(all_branches, library="ak")
         n = len(events)
         logger.info(f"  {n} events loaded")
@@ -436,7 +561,10 @@ class DAOD_PHYSLITE_Converter:
         # Pre-build per-event track arrays for isolation computation
         track_arrays = self._load_track_arrays(events)
 
-        return {
+        # Check if truth is available
+        has_truth = "TruthElectronsAuxDyn.pt" in events.fields
+
+        result = {
             'electrons':  self._process_electrons(events, track_arrays),
             'muons':      self._process_muons(events, track_arrays),
             'taus':       self._process_taus(events),
@@ -446,6 +574,11 @@ class DAOD_PHYSLITE_Converter:
             'met':        self._process_met(events),
             'event_info': self._process_event_info(events),
         }
+
+        if has_truth:
+            result['truth'] = self._process_truth(events)
+
+        return result
 
     # ── Track pre-loading (for isolation) ────────────────────────────────────
 
@@ -522,6 +655,28 @@ class DAOD_PHYSLITE_Converter:
                 if lh_loose is not None:
                     pm = pm & (lh_loose > 0)
 
+            # Author cut: require author 1 (single-track) or 16 (forward)
+            if self.config.electron_require_author:
+                e_author = _safe_get(ev, "AnalysisElectronsAuxDyn.author")
+                if e_author is not None:
+                    pm = pm & ((e_author == 1) | (e_author == 16))
+
+            # Object Quality: (OQ & 1446) == 0
+            if self.config.electron_require_oq:
+                e_oq = _safe_get(ev, "AnalysisElectronsAuxDyn.OQ")
+                if e_oq is not None:
+                    pm = pm & ((e_oq & 1446) == 0)
+
+            # Eta cut (cluster eta, approximated by track eta here)
+            e_eta = ev["AnalysisElectronsAuxDyn.eta"]
+            pm = pm & (abs(e_eta) < self.config.electron_eta_cut)
+
+            # Impact parameter: |z0*sinθ| < 0.5 mm
+            if self.config.electron_z0sintheta_cut < 100:
+                e_z0st = _safe_get(ev, "AnalysisElectronsAuxDyn.z0sinTheta")
+                if e_z0st is not None:
+                    pm = pm & (abs(e_z0st) < self.config.electron_z0sintheta_cut)
+
             def _s(name):
                 v = _safe_get(ev, name)
                 return v[pm] if v is not None else ak.zeros_like(e_pt_mev[pm])
@@ -588,6 +743,12 @@ class DAOD_PHYSLITE_Converter:
             mu_pt_mev = ev["AnalysisMuonsAuxDyn.pt"]
             pm = mu_pt_mev > self.config.muon_pt_cut
 
+            # Preselection: standard ATLAS muon preselection flag
+            if self.config.muon_require_presel:
+                mu_presel = _safe_get(ev, "AnalysisMuonsAuxDyn.DFCommonMuonPassPreselection")
+                if mu_presel is not None:
+                    pm = pm & (mu_presel > 0)
+
             # Quality: require quality <= max (0=Tight,1=Medium,2=Loose)
             if self.config.muon_max_quality < 99:
                 mu_qual = _safe_get(ev, "AnalysisMuonsAuxDyn.quality")
@@ -597,6 +758,26 @@ class DAOD_PHYSLITE_Converter:
             # Eta: fiducial cut
             mu_eta = ev["AnalysisMuonsAuxDyn.eta"]
             pm = pm & (abs(mu_eta) < self.config.muon_eta_cut)
+
+            # Type-dependent cuts:
+            # CaloTagged: also pT > 15 GeV
+            # Combined + CaloTagged: impact parameter cuts (loose)
+            # StandAlone: no impact parameter cut
+            mu_type = _safe_get(ev, "AnalysisMuonsAuxDyn.muonType")
+            mu_d0 = _safe_get(ev, "AnalysisMuonsAuxDyn.d0")
+            mu_z0st = _safe_get(ev, "AnalysisMuonsAuxDyn.z0sinTheta")
+
+            if mu_type is not None:
+                # CaloTagged (type=3): require higher pT
+                is_calo = (mu_type == 3)
+                pm = pm & (~is_calo | (mu_pt_mev > self.config.muon_calo_pt_cut))
+
+                # Combined (0) + CaloTagged (3): impact parameter cuts
+                is_combined_or_calo = (mu_type == 0) | (mu_type == 3)
+                if mu_d0 is not None and self.config.muon_d0_cut < 100:
+                    pm = pm & (~is_combined_or_calo | (abs(mu_d0) < self.config.muon_d0_cut))
+                if mu_z0st is not None and self.config.muon_z0sintheta_cut < 100:
+                    pm = pm & (~is_combined_or_calo | (abs(mu_z0st) < self.config.muon_z0sintheta_cut))
 
             def _s(name):
                 v = _safe_get(ev, name)
@@ -1008,6 +1189,168 @@ class DAOD_PHYSLITE_Converter:
 
         return {'common': c, 'atlas': a}
 
+    def _process_truth(self, events) -> Dict:
+        """Process truth particles (MC only). Stores truth leptons, photons, jets, bosons, MET."""
+        logger.info("Processing truth particles...")
+        n_events = len(events)
+        mx = self.config.max_objects
+
+        truth_data = {}
+
+        # Truth particles: electrons, muons, photons, taus
+        truth_particles = {
+            'electrons': ('TruthElectronsAuxDyn', mx),
+            'muons':     ('TruthMuonsAuxDyn', mx),
+            'photons':   ('TruthPhotonsAuxDyn', mx),
+            'taus':      ('TruthTausAuxDyn', mx),
+        }
+
+        for obj_name, (prefix, max_n) in truth_particles.items():
+            pt_key = f"{prefix}.pt"
+            if pt_key not in events.fields:
+                continue
+
+            d = {
+                'pt':     np.zeros((n_events, max_n), dtype=np.float32),
+                'eta':    np.zeros((n_events, max_n), dtype=np.float32),
+                'phi':    np.zeros((n_events, max_n), dtype=np.float32),
+                'mass':   np.zeros((n_events, max_n), dtype=np.float32),
+                'pdgId':  np.zeros((n_events, max_n), dtype=np.int32),
+                'status': np.zeros((n_events, max_n), dtype=np.int32),
+                'n':      np.zeros(n_events, dtype=np.int32),
+                'mask':   np.zeros((n_events, max_n), dtype=bool),
+            }
+
+            for i, ev in enumerate(events):
+                pt_arr = _safe_get(ev, pt_key)
+                if pt_arr is None:
+                    continue
+                pt_np = ak.to_numpy(pt_arr)
+                n = min(len(pt_np), max_n)
+                if n == 0:
+                    continue
+                si = np.argsort(pt_np)[::-1][:n]
+                d['pt'][i, :n]     = pt_np[si] * MeV
+                d['eta'][i, :n]    = ak.to_numpy(_safe_get(ev, f"{prefix}.eta"))[si]
+                d['phi'][i, :n]    = ak.to_numpy(_safe_get(ev, f"{prefix}.phi"))[si]
+                m = _safe_get(ev, f"{prefix}.m")
+                if m is not None:
+                    d['mass'][i, :n] = ak.to_numpy(m)[si] * MeV
+                pid = _safe_get(ev, f"{prefix}.pdgId")
+                if pid is not None:
+                    d['pdgId'][i, :n] = ak.to_numpy(pid)[si]
+                st = _safe_get(ev, f"{prefix}.status")
+                if st is not None:
+                    d['status'][i, :n] = ak.to_numpy(st)[si]
+                d['n'][i] = n
+                d['mask'][i, :n] = True
+
+            truth_data[obj_name] = d
+            logger.info(f"  Truth {obj_name}: avg {d['n'].mean():.1f} per event")
+
+        # Truth bosons (Higgs, Z, W)
+        boson_prefix = "TruthBosonAuxDyn"
+        max_bosons = 5
+        if f"{boson_prefix}.pt" in events.fields:
+            d = {
+                'pt':     np.zeros((n_events, max_bosons), dtype=np.float32),
+                'eta':    np.zeros((n_events, max_bosons), dtype=np.float32),
+                'phi':    np.zeros((n_events, max_bosons), dtype=np.float32),
+                'mass':   np.zeros((n_events, max_bosons), dtype=np.float32),
+                'pdgId':  np.zeros((n_events, max_bosons), dtype=np.int32),
+                'status': np.zeros((n_events, max_bosons), dtype=np.int32),
+                'n':      np.zeros(n_events, dtype=np.int32),
+                'mask':   np.zeros((n_events, max_bosons), dtype=bool),
+            }
+            for i, ev in enumerate(events):
+                pt_arr = _safe_get(ev, f"{boson_prefix}.pt")
+                if pt_arr is None:
+                    continue
+                pt_np = ak.to_numpy(pt_arr)
+                n = min(len(pt_np), max_bosons)
+                if n == 0:
+                    continue
+                si = np.argsort(pt_np)[::-1][:n]
+                d['pt'][i, :n]   = pt_np[si] * MeV
+                d['eta'][i, :n]  = ak.to_numpy(_safe_get(ev, f"{boson_prefix}.eta"))[si]
+                d['phi'][i, :n]  = ak.to_numpy(_safe_get(ev, f"{boson_prefix}.phi"))[si]
+                bm = _safe_get(ev, f"{boson_prefix}.m")
+                if bm is not None:
+                    d['mass'][i, :n] = ak.to_numpy(bm)[si] * MeV
+                pid = _safe_get(ev, f"{boson_prefix}.pdgId")
+                if pid is not None:
+                    d['pdgId'][i, :n] = ak.to_numpy(pid)[si]
+                st = _safe_get(ev, f"{boson_prefix}.status")
+                if st is not None:
+                    d['status'][i, :n] = ak.to_numpy(st)[si]
+                d['n'][i] = n
+                d['mask'][i, :n] = True
+            truth_data['bosons'] = d
+            logger.info(f"  Truth bosons: avg {d['n'].mean():.1f} per event")
+
+        # Truth jets
+        jet_prefix = "AntiKt4TruthDressedWZJetsAuxDyn"
+        if f"{jet_prefix}.pt" in events.fields:
+            d = {
+                'pt':   np.zeros((n_events, mx), dtype=np.float32),
+                'eta':  np.zeros((n_events, mx), dtype=np.float32),
+                'phi':  np.zeros((n_events, mx), dtype=np.float32),
+                'mass': np.zeros((n_events, mx), dtype=np.float32),
+                'n':    np.zeros(n_events, dtype=np.int32),
+                'mask': np.zeros((n_events, mx), dtype=bool),
+            }
+            for i, ev in enumerate(events):
+                pt_arr = _safe_get(ev, f"{jet_prefix}.pt")
+                if pt_arr is None:
+                    continue
+                pt_np = ak.to_numpy(pt_arr)
+                pm = pt_np > 20_000  # 20 GeV truth jet cut
+                pt_np = pt_np[pm]
+                n = min(len(pt_np), mx)
+                if n == 0:
+                    continue
+                si = np.argsort(pt_np)[::-1][:n]
+                d['pt'][i, :n]   = pt_np[si] * MeV
+                eta_all = ak.to_numpy(_safe_get(ev, f"{jet_prefix}.eta"))[pm]
+                phi_all = ak.to_numpy(_safe_get(ev, f"{jet_prefix}.phi"))[pm]
+                d['eta'][i, :n]  = eta_all[si]
+                d['phi'][i, :n]  = phi_all[si]
+                jm = _safe_get(ev, f"{jet_prefix}.m")
+                if jm is not None:
+                    d['mass'][i, :n] = ak.to_numpy(jm)[pm][si] * MeV
+                d['n'][i] = n
+                d['mask'][i, :n] = True
+            truth_data['jets'] = d
+            logger.info(f"  Truth jets: avg {d['n'].mean():.1f} per event")
+
+        # Truth MET
+        if "MET_TruthAuxDyn.mpx" in events.fields:
+            d = {
+                'pt':    np.zeros(n_events, dtype=np.float32),
+                'phi':   np.zeros(n_events, dtype=np.float32),
+                'sumet': np.zeros(n_events, dtype=np.float32),
+            }
+            for i, ev in enumerate(events):
+                mpx = _safe_get(ev, "MET_TruthAuxDyn.mpx")
+                mpy = _safe_get(ev, "MET_TruthAuxDyn.mpy")
+                sumet = _safe_get(ev, "MET_TruthAuxDyn.sumet")
+                if mpx is not None and mpy is not None:
+                    mpx_np = ak.to_numpy(mpx)
+                    mpy_np = ak.to_numpy(mpy)
+                    if mpx_np.ndim > 0 and len(mpx_np) > 0:
+                        mx_val = float(mpx_np[-1]) * MeV
+                        my_val = float(mpy_np[-1]) * MeV
+                        d['pt'][i] = np.sqrt(mx_val**2 + my_val**2)
+                        d['phi'][i] = np.arctan2(my_val, mx_val)
+                if sumet is not None:
+                    sumet_np = ak.to_numpy(sumet)
+                    if sumet_np.ndim > 0 and len(sumet_np) > 0:
+                        d['sumet'][i] = float(sumet_np[-1]) * MeV
+            truth_data['met'] = d
+            logger.info(f"  Truth MET: avg {d['pt'].mean():.1f} GeV")
+
+        return truth_data
+
     # ── HDF5 writer ───────────────────────────────────────────────────────────
 
     def save_to_hdf5(self, data: Dict, output_file: str, input_file: str):
@@ -1049,14 +1392,30 @@ class DAOD_PHYSLITE_Converter:
             for key, arr in data['event_info']['atlas'].items():
                 grp_aev.create_dataset(key, data=arr, compression='gzip')
 
+            # ── /truth (MC only) ──────────────────────────────────────────
+            if 'truth' in data and data['truth']:
+                grp_t = f.create_group('truth')
+                for obj_name, obj_dict in data['truth'].items():
+                    if obj_name == 'met':
+                        # MET is 1D per event, not per-object
+                        sub = grp_t.create_group('met')
+                        for key, arr in obj_dict.items():
+                            sub.create_dataset(key, data=arr, compression='gzip')
+                    else:
+                        sub = grp_t.create_group(obj_name)
+                        for key, arr in obj_dict.items():
+                            sub.create_dataset(key, data=arr, compression='gzip',
+                                               compression_opts=4)
+                logger.info(f"  Truth groups: {list(data['truth'].keys())}")
+
             # ── /metadata  (attrs only — no datasets) ────────────────────────
             meta = f.create_group('metadata')
             meta.attrs['experiment']            = 'ATLAS'
             meta.attrs['experiment_id']         = EXPERIMENT_ID
-            meta.attrs['format_version']        = FORMAT_VERSION
+            meta.attrs['converter_version']     = CONVERTER_VERSION
+            meta.attrs['converter_changelog']   = CONVERTER_CHANGELOG.get(CONVERTER_VERSION, '')
             meta.attrs['input_file']            = str(Path(input_file).name)
             meta.attrs['n_events']              = n_events
-            meta.attrs['git_hash']              = _git_hash()
 
             # ── CERN Open Data metadata ──────────────────────────────
             fname = Path(input_file).name
@@ -1105,10 +1464,18 @@ class DAOD_PHYSLITE_Converter:
             meta.attrs['max_objects']           = cfg.max_objects
             meta.attrs['max_tracks']            = cfg.max_tracks
 
-            # Quality selections
+            # Quality selections (HZZ-style)
             meta.attrs['electron_require_loose'] = cfg.electron_require_loose
+            meta.attrs['electron_eta_cut']       = cfg.electron_eta_cut
+            meta.attrs['electron_z0sintheta_cut_mm'] = cfg.electron_z0sintheta_cut
+            meta.attrs['electron_require_author'] = cfg.electron_require_author
+            meta.attrs['electron_require_oq']    = cfg.electron_require_oq
             meta.attrs['muon_max_quality']       = cfg.muon_max_quality
+            meta.attrs['muon_require_presel']    = cfg.muon_require_presel
             meta.attrs['muon_eta_cut']           = cfg.muon_eta_cut
+            meta.attrs['muon_d0_cut_mm']         = cfg.muon_d0_cut
+            meta.attrs['muon_z0sintheta_cut_mm'] = cfg.muon_z0sintheta_cut
+            meta.attrs['muon_calo_pt_cut_gev']   = cfg.muon_calo_pt_cut * MeV
             meta.attrs['photon_require_loose']   = cfg.photon_require_loose
             meta.attrs['tau_rnn_jet_cut']        = cfg.tau_rnn_jet_cut
             meta.attrs['jet_eta_cut']            = cfg.jet_eta_cut
@@ -1212,3 +1579,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+  
