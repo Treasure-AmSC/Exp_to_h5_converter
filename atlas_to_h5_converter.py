@@ -57,7 +57,7 @@ Object Selection (mimicking H→ZZ→4ℓ analysis)
     - |z0·sinθ| < 3m mm
 
   Muons:
-    - pT > 5 GeV  (calo-tagged: pT > 15 GeV)
+    - pT > 5 GeV  (calo-tagged: pT > 5 GeV)
     - DFCommonMuonPassPreselection (standard ATLAS muon preselection)
     - |η| < 2.7
     - Combined + CaloTagged: |d0| < 3 mm, |z0·sinθ| < 3 mm
@@ -272,7 +272,7 @@ class PhysicsObjectConfig:
     muon_eta_cut: float = 2.7
     muon_d0_cut: float = 3.0           # mm (looser than HZZ's 1 mm)
     muon_z0sintheta_cut: float = 3.0   # mm (looser than HZZ's 0.5 mm)
-    muon_calo_pt_cut: float = 15_000   # MeV — higher pT for calo-tagged muons
+    muon_calo_pt_cut: float = 5_000   # MeV — higher pT for calo-tagged muons
 
     # Photons: require isLoose
     photon_require_loose: bool = True
