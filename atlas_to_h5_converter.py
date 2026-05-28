@@ -49,12 +49,12 @@ Schema
 Object Selection (mimicking H→ZZ→4ℓ analysis)
 ----------------------------------------------
   Electrons:
-    - pT > 7 GeV
+    - pT > 5 GeV
     - LH Loose ID (DFCommonElectronsLHLoose)
     - Author == 1 (single-track) or 16 (forward)
     - Object Quality: (OQ & 1446) == 0
     - |η| < 2.47
-    - |z0·sinθ| < 0.5 mm
+    - |z0·sinθ| < 3m mm
 
   Muons:
     - pT > 5 GeV  (calo-tagged: pT > 15 GeV)
@@ -247,13 +247,13 @@ MeV = 1e-3                  # convert MeV → GeV
 
 @dataclass
 class PhysicsObjectConfig:
-    electron_pt_cut: float = 7_000   # MeV
+    electron_pt_cut: float = 5_000   # MeV
     muon_pt_cut:     float = 5_000   # MeV
     photon_pt_cut:   float = 10_000  # MeV
     tau_pt_cut:      float = 20_000  # MeV
-    jet_pt_cut:      float = 30_000  # MeV  (HZZ default: 30 GeV)
+    jet_pt_cut:      float = 20_000  # MeV 
     track_pt_cut:    float = 500     # MeV  (= ISO_PT_FLOOR so tracks used for iso are kept)
-    max_objects:     int   = 20
+    max_objects:     int   = 50
     max_tracks:      int   = 50
 
     # ── Quality selections (mimicking H→ZZ→4ℓ analysis) ────────────
@@ -261,7 +261,7 @@ class PhysicsObjectConfig:
     #            OQ clean, |z0*sinθ| < 0.5 mm
     electron_require_loose: bool = True
     electron_eta_cut: float = 2.47      # |eta_cluster|
-    electron_z0sintheta_cut: float = 0.5  # mm
+    electron_z0sintheta_cut: float = 3  # mm
     electron_require_author: bool = True  # author == 1 or 16
     electron_require_oq: bool = True      # (OQ & 1446) == 0
 
