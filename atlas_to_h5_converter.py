@@ -20,20 +20,17 @@ Schema
 ------
   common/electrons : pt, eta, phi, charge, trk_iso03, mask, n
   common/muons     : pt, eta, phi, charge, trk_iso03, mask, n
-  common/taus      : pt, eta, phi, charge, is_1prong, mask, n
+  common/taus      : pt, eta, phi, charge, mask, n
   common/photons   : pt, eta, phi, trk_iso03, mask, n
   common/jets      : pt, eta, phi, mass, n_trk, mask, n
   common/tracks    : pt, eta, phi, d0, z0, mask, n
   common/met       : pt, phi, sumet                    (scalar per event)
   common/event     : pvx, pvy, pvz, mu, experiment_id, is_simulation
 
-  atlas/electrons  : LHLoose, LHMedium, LHTight, topoetcone20, ptvarcone30, mass
-  atlas/muons      : quality, muonType, passIDCuts, passPresel,
-                     topoetcone20, ptvarcone30
-  atlas/taus       : NNDecayMode, RNNJetScore, RNNEleScore,
-                     EleRNNLoose/Medium/Tight_v1
-  atlas/photons    : isLoose, isTight, isCleaning, author,
-                     topoetcone20, topoetcone40, ptcone20
+  atlas/electrons  : LHMedium, LHTight, topoetcone20, ptvarcone30, mass
+  atlas/muons      : topoetcone20, ptvarcone30
+  atlas/taus       : NNDecayMode, RNNJetScore, RNNEleScore
+  atlas/photons    : isTight, topoetcone20, topoetcone40, ptcone20
   atlas/jets       : DL1d_pb/pc/pu, GN2_pb/pc/pu, QG_nTracks/Width/C1
   atlas/tracks     : qOverP, chiSquared, nDoF
   atlas/event      : event_number, run_number, mcChannelNumber
@@ -54,27 +51,36 @@ Object Selection (mimicking H→ZZ→4ℓ analysis)
     - Author == 1 (single-track) or 16 (forward)
     - Object Quality: (OQ & 1446) == 0
     - |η| < 2.47
-    - |z0·sinθ| < 3m mm
+    - |z0·sinθ| < 3 mm
 
   Muons:
-    - pT > 5 GeV  (calo-tagged: pT > 5 GeV)
+    - pT > 5 GeV  (calo-tagged: pT > 15 GeV)
     - DFCommonMuonPassPreselection (standard ATLAS muon preselection)
     - |η| < 2.7
     - Combined + CaloTagged: |d0| < 3 mm, |z0·sinθ| < 3 mm
     - StandAlone: no impact parameter cut
 
   Photons:
-    - pT > 10 GeV
+    - pT > 15 GeV
+    - |η| < 1.37 or 1.52 < |η| < 2.37 (crack veto)
     - DFCommonPhotonsIsEMLoose
 
   Taus:
     - pT > 20 GeV
-    - RNNJetScore > 0.01
+    - |η| < 2.5, excluding 1.37 < |η| < 1.52 (crack veto)
+    - nTracks == 1 or 3
+    - |charge| == 1
+    - RNNJetScore > 0.15 (~Loose WP)
 
   Jets:
-    - pT > 30 GeV
+    - pT > 25 GeV
     - |η| < 4.5
-    - DFCommonJets_jetClean_LooseBad (standard ATLAS Loose jet cleaning)
+    - NNJvt for central jets (|η| < 2.4, pT < 60 GeV)
+    - fJvt for forward jets (|η| > 2.5, pT < 60 GeV)
+
+  Event-level:
+    - DFCommonJets_eventClean_LooseBad (veto entire event if any jet fails
+      LooseBad cleaning — catches beam-gas, HEC spikes, coherent noise)
 
   Tracks:
     - pT > 500 MeV
@@ -121,14 +127,18 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-CONVERTER_VERSION = "2.1.0"
+CONVERTER_VERSION = "2.2.0"
 EXPERIMENT_ID  = 0          # 0 = ATLAS, 1 = CMS
 CONVERTER_CHANGELOG = {
+    "2.2.0": "Removed saved variables: is_1prong (taus), EleRNN WPs (taus), "
+             "LHLoose (electrons), quality/muonType/passIDCuts/passPresel (muons), "
+             "isLoose/isCleaning/author (photons). These are used for selection "
+             "but not stored. Added photon/tau crack veto, tau nTracks/charge cuts, "
+             "NNJvt/fJvt pile-up rejection, event-level jet cleaning.",
     "2.1.0": "Add truth particles, CERN Open Data metadata, HZZ-style quality cuts, "
-             "jet LooseBad cleaning, muon passPresel, electron OQ/author/z0sinθ, "
-             "production versioning",
+             "muon passPresel, electron OQ/author/z0sinθ, production versioning",
     "2.0.0": "Cross-experiment format (common/atlas split), charge for e/μ/τ, "
-             "trk_iso03, muonType, NNDecayMode, is_1prong",
+             "trk_iso03, NNDecayMode",
     "1.0.0": "Initial format: flat H5, MeV units, no quality cuts",
 }
 
@@ -249,16 +259,16 @@ MeV = 1e-3                  # convert MeV → GeV
 class PhysicsObjectConfig:
     electron_pt_cut: float = 5_000   # MeV
     muon_pt_cut:     float = 5_000   # MeV
-    photon_pt_cut:   float = 10_000  # MeV
+    photon_pt_cut:   float = 15_000  # MeV
     tau_pt_cut:      float = 20_000  # MeV
-    jet_pt_cut:      float = 20_000  # MeV 
+    jet_pt_cut:      float = 25_000  # MeV 
     track_pt_cut:    float = 500     # MeV  (= ISO_PT_FLOOR so tracks used for iso are kept)
-    max_objects:     int   = 50
+    max_objects:     int   = 20
     max_tracks:      int   = 50
 
     # ── Quality selections (mimicking H→ZZ→4ℓ analysis) ────────────
     # Electrons: require LHLoose, author 1 or 16, |eta_cl| < 2.47,
-    #            OQ clean, |z0*sinθ| < 0.5 mm
+    #            OQ clean, |z0*sinθ| < 3 mm
     electron_require_loose: bool = True
     electron_eta_cut: float = 2.47      # |eta_cluster|
     electron_z0sintheta_cut: float = 3  # mm
@@ -272,17 +282,33 @@ class PhysicsObjectConfig:
     muon_eta_cut: float = 2.7
     muon_d0_cut: float = 3.0           # mm (looser than HZZ's 1 mm)
     muon_z0sintheta_cut: float = 3.0   # mm (looser than HZZ's 0.5 mm)
-    muon_calo_pt_cut: float = 5_000   # MeV — higher pT for calo-tagged muons
+    muon_calo_pt_cut: float = 15_000   # MeV — higher pT for calo-tagged muons
 
-    # Photons: require isLoose
+    # Photons: require isLoose, veto crack region
+    #   |eta| < 1.37  OR  1.52 < |eta| < 2.37
     photon_require_loose: bool = True
+    photon_eta_max: float = 2.37
+    photon_veto_crack: bool = True   # exclude 1.37 < |eta| < 1.52
 
-    # Taus: require RNNJetScore > loose WP (~0.01) — removes QCD fakes
-    tau_rnn_jet_cut: float = 0.01  # set 0 to disable
+    # Taus: pT > 20 GeV, |eta| < 2.5 (excl. crack), 1 or 3 tracks,
+    #       |charge| = 1, JetID RNN Loose WP (RNNJetScore > 0.15 approx)
+    tau_eta_cut: float = 2.5
+    tau_veto_crack: bool = True       # exclude 1.37 < |eta| < 1.52
+    tau_require_ntracks_1or3: bool = True  # nTracks == 1 or 3
+    tau_require_charge1: bool = True       # |charge| == 1
+    tau_rnn_jet_cut: float = 0.15     # ~Loose WP flat approximation
 
-    # Jets: require |eta| < 4.5, LooseBad cleaning, pT > 30 GeV (HZZ default)
+    # Jets: require |eta| < 4.5, pT > 25 GeV,
+    #       NNJvt for central (|eta| < 2.4, pT < 60 GeV),
+    #       fJvt for forward (|eta| > 2.5, pT < 60 GeV)
+    # Event-level cleaning: veto events with bad jets (DFCommonJets_eventClean_LooseBad)
     jet_eta_cut: float = 4.5
-    jet_clean_loose: bool = True     # require DFCommonJets_jetClean_LooseBad
+    event_clean_loose: bool = True   # veto entire event if any jet fails LooseBad cleaning
+    jet_apply_jvt: bool = True       # apply NNJvt + fJvt pile-up rejection
+    jet_jvt_pt_max: float = 60_000   # MeV — only apply JVT below this pT
+    jet_jvt_eta_max: float = 2.4     # NNJvt for |eta| < this
+    jet_fjvt_eta_min: float = 2.5    # fJvt for |eta| > this
+    jet_fjvt_cut: float = 0.5        # fJvt < this passes (lower = more pile-up-like)
 
     # Tracks: require |eta| < 2.5, |d0| < 2 mm, |z0·sinθ| < 3 mm
     track_eta_cut: float = 2.5
@@ -347,15 +373,13 @@ TAU_BRANCHES = [
     "AnalysisTauJetsAuxDyn.eta",
     "AnalysisTauJetsAuxDyn.phi",
     "AnalysisTauJetsAuxDyn.charge",
+    "AnalysisTauJetsAuxDyn.nTracks",
     # NNDecayMode: 0/1/2 = 1-prong, 10/11 = 3-prong (same encoding as CMS Tau_decayMode)
     "AnalysisTauJetsAuxDyn.NNDecayMode",
     # Jet discriminant (Run-3 tagger)
     "AnalysisTauJetsAuxDyn.RNNJetScore",
-    # Electron veto discriminant + working points
+    # Electron veto discriminant
     "AnalysisTauJetsAuxDyn.RNNEleScore",
-    "AnalysisTauJetsAuxDyn.EleRNNLoose_v1",
-    "AnalysisTauJetsAuxDyn.EleRNNMedium_v1",
-    "AnalysisTauJetsAuxDyn.EleRNNTight_v1",
 ]
 
 JET_BRANCHES = [
@@ -367,8 +391,11 @@ JET_BRANCHES = [
     "AnalysisJetsAuxDyn.DFCommonJets_QGTagger_NTracks",
     "AnalysisJetsAuxDyn.DFCommonJets_QGTagger_TracksWidth",
     "AnalysisJetsAuxDyn.DFCommonJets_QGTagger_TracksC1",
-    # Jet cleaning
-    "AnalysisJetsAuxDyn.DFCommonJets_jetClean_LooseBad",
+    # Pile-up rejection (JVT)
+    "AnalysisJetsAuxDyn.NNJvt",
+    "AnalysisJetsAuxDyn.NNJvtPass",
+    "AnalysisJetsAuxDyn.DFCommonJets_fJvt",
+    # B-tagging
     "BTagging_AntiKt4EMPFlowAuxDyn.DL1dv01_pb",
     "BTagging_AntiKt4EMPFlowAuxDyn.DL1dv01_pc",
     "BTagging_AntiKt4EMPFlowAuxDyn.DL1dv01_pu",
@@ -456,6 +483,8 @@ EVENT_BRANCHES = [
     "EventInfoAuxDyn.runNumber",
     "EventInfoAuxDyn.mcChannelNumber",
     "EventInfoAuxDyn.averageInteractionsPerCrossing",
+    # Event-level jet cleaning (veto entire event if any jet is bad)
+    "EventInfoAuxDyn.DFCommonJets_eventClean_LooseBad",
 ]
 
 VERTEX_BRANCHES = [
@@ -558,6 +587,26 @@ class DAOD_PHYSLITE_Converter:
         n = len(events)
         logger.info(f"  {n} events loaded")
 
+        # Event-level jet cleaning: veto events with bad jets
+        # Flag is True if event passes (no bad jets, OR no jets at all)
+        # Only veto events where the flag is explicitly False
+        if self.config.event_clean_loose:
+            clean_flag = "EventInfoAuxDyn.DFCommonJets_eventClean_LooseBad"
+            if clean_flag in events.fields:
+                clean_arr = ak.to_numpy(events[clean_flag])
+                # Flag == False means event contains a bad jet → veto
+                # Flag == True means all jets are clean (or no jets) → keep
+                clean_mask = clean_arr != 0
+                n_bad = n - clean_mask.sum()
+                if n_bad > 0:
+                    events = events[clean_mask]
+                    logger.info(f"  Event cleaning: {n_bad} events vetoed ({100*n_bad/n:.1f}%), "
+                                f"{len(events)} remaining")
+                else:
+                    logger.info(f"  Event cleaning: all {n} events pass")
+            else:
+                logger.warning(f"  Event cleaning branch not found — skipping")
+
         # Pre-build per-event track arrays for isolation computation
         track_arrays = self._load_track_arrays(events)
 
@@ -639,7 +688,7 @@ class DAOD_PHYSLITE_Converter:
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
         a = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['mass','LHLoose','LHMedium','LHTight',
+             for k in ['mass','LHMedium','LHTight',
                        'topoetcone20','ptvarcone30']}
 
         for i, ev in enumerate(events):
@@ -711,7 +760,6 @@ class DAOD_PHYSLITE_Converter:
 
             # ATLAS-specific
             a['mass'][i, :n]       = ak.to_numpy(_s("AnalysisElectronsAuxDyn.m"))[si[:n]] * MeV
-            a['LHLoose'][i, :n]    = ak.to_numpy(_s("AnalysisElectronsAuxDyn.DFCommonElectronsLHLoose"))[si[:n]]
             a['LHMedium'][i, :n]   = ak.to_numpy(_s("AnalysisElectronsAuxDyn.DFCommonElectronsLHMedium"))[si[:n]]
             a['LHTight'][i, :n]    = ak.to_numpy(_s("AnalysisElectronsAuxDyn.DFCommonElectronsLHTight"))[si[:n]]
             a['topoetcone20'][i,:n]= ak.to_numpy(_s("AnalysisElectronsAuxDyn.topoetcone20"))[si[:n]] * MeV
@@ -733,8 +781,7 @@ class DAOD_PHYSLITE_Converter:
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
         a = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['quality','muonType','passIDCuts','passPresel',
-                       'topoetcone20','ptvarcone30']}
+             for k in ['topoetcone20','ptvarcone30']}
 
         for i, ev in enumerate(events):
             if "AnalysisMuonsAuxDyn.pt" not in ev.fields:
@@ -810,10 +857,6 @@ class DAOD_PHYSLITE_Converter:
                                          tr['z0'], tr['theta'])
                 c['trk_iso03'][i, :n] = iso
 
-            a['quality'][i, :n]     = ak.to_numpy(_s("AnalysisMuonsAuxDyn.quality"))[si[:n]]
-            a['muonType'][i, :n]    = ak.to_numpy(_s("AnalysisMuonsAuxDyn.muonType"))[si[:n]]
-            a['passIDCuts'][i, :n]  = ak.to_numpy(_s("AnalysisMuonsAuxDyn.DFCommonMuonPassIDCuts"))[si[:n]]
-            a['passPresel'][i, :n]  = ak.to_numpy(_s("AnalysisMuonsAuxDyn.DFCommonMuonPassPreselection"))[si[:n]]
             a['topoetcone20'][i,:n] = ak.to_numpy(_s("AnalysisMuonsAuxDyn.topoetcone20"))[si[:n]] * MeV
             a['ptvarcone30'][i, :n] = ak.to_numpy(_s("AnalysisMuonsAuxDyn.ptvarcone30"))[si[:n]] * MeV
 
@@ -832,7 +875,7 @@ class DAOD_PHYSLITE_Converter:
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
         a = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['isLoose','isTight','isCleaning','author',
+             for k in ['isTight',
                        'topoetcone20','topoetcone40','ptcone20']}
 
         for i, ev in enumerate(events):
@@ -840,7 +883,15 @@ class DAOD_PHYSLITE_Converter:
                 continue
 
             ph_pt_mev = ev["AnalysisPhotonsAuxDyn.pt"]
+            ph_eta = ev["AnalysisPhotonsAuxDyn.eta"]
+            abs_eta = abs(ph_eta)
             pm = ph_pt_mev > self.config.photon_pt_cut
+
+            # Eta + crack veto: |eta| < 1.37 OR 1.52 < |eta| < 2.37
+            if self.config.photon_veto_crack:
+                pm = pm & ((abs_eta < 1.37) | ((abs_eta > 1.52) & (abs_eta < self.config.photon_eta_max)))
+            else:
+                pm = pm & (abs_eta < self.config.photon_eta_max)
 
             # Quality: require isLoose
             if self.config.photon_require_loose:
@@ -878,10 +929,7 @@ class DAOD_PHYSLITE_Converter:
                                          tr['z0'], tr['theta'])
                 c['trk_iso03'][i, :n] = iso
 
-            a['isLoose'][i, :n]    = ak.to_numpy(_s("AnalysisPhotonsAuxDyn.DFCommonPhotonsIsEMLoose"))[si[:n]]
             a['isTight'][i, :n]    = ak.to_numpy(_s("AnalysisPhotonsAuxDyn.DFCommonPhotonsIsEMTight"))[si[:n]]
-            a['isCleaning'][i,:n]  = ak.to_numpy(_s("AnalysisPhotonsAuxDyn.DFCommonPhotonsCleaning"))[si[:n]]
-            a['author'][i, :n]     = ak.to_numpy(_s("AnalysisPhotonsAuxDyn.author"))[si[:n]]
             a['topoetcone20'][i,:n]= ak.to_numpy(_s("AnalysisPhotonsAuxDyn.topoetcone20"))[si[:n]] * MeV
             a['topoetcone40'][i,:n]= ak.to_numpy(_s("AnalysisPhotonsAuxDyn.topoetcone40"))[si[:n]] * MeV
             a['ptcone20'][i, :n]   = ak.to_numpy(_s("AnalysisPhotonsAuxDyn.ptcone20"))[si[:n]] * MeV
@@ -897,7 +945,7 @@ class DAOD_PHYSLITE_Converter:
 
         # common: kinematics + charge + topology flag portable to CMS
         c = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['pt','eta','phi','charge','is_1prong']}
+             for k in ['pt','eta','phi','charge']}
         c['n'] = np.zeros(n_events, dtype=np.int32)
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
@@ -906,8 +954,7 @@ class DAOD_PHYSLITE_Converter:
              for k in [
                  'NNDecayMode',
                  'RNNJetScore',
-                 'RNNEleScore', 'EleRNNLoose_v1',
-                 'EleRNNMedium_v1', 'EleRNNTight_v1',
+                 'RNNEleScore',
              ]}
 
         for i, ev in enumerate(events):
@@ -915,9 +962,29 @@ class DAOD_PHYSLITE_Converter:
                 continue
 
             tau_pt_mev = ev["AnalysisTauJetsAuxDyn.pt"]
+            tau_eta = ev["AnalysisTauJetsAuxDyn.eta"]
+            abs_eta = abs(tau_eta)
             pm = tau_pt_mev > self.config.tau_pt_cut
 
-            # Quality: require RNNJetScore above loose WP (removes QCD fakes)
+            # Eta + crack veto: |eta| < 2.5, excluding 1.37 < |eta| < 1.52
+            if self.config.tau_veto_crack:
+                pm = pm & (abs_eta < self.config.tau_eta_cut) & ~((abs_eta > 1.37) & (abs_eta < 1.52))
+            else:
+                pm = pm & (abs_eta < self.config.tau_eta_cut)
+
+            # nTracks: require 1 or 3
+            if self.config.tau_require_ntracks_1or3:
+                n_trk = _safe_get(ev, "AnalysisTauJetsAuxDyn.nTracks")
+                if n_trk is not None:
+                    pm = pm & ((n_trk == 1) | (n_trk == 3))
+
+            # |charge| == 1
+            if self.config.tau_require_charge1:
+                tau_charge = _safe_get(ev, "AnalysisTauJetsAuxDyn.charge")
+                if tau_charge is not None:
+                    pm = pm & (abs(tau_charge) == 1)
+
+            # JetID: RNNJetScore > Loose WP
             if self.config.tau_rnn_jet_cut > 0:
                 rnn_jet = _safe_get(ev, "AnalysisTauJetsAuxDyn.RNNJetScore")
                 if rnn_jet is not None:
@@ -946,18 +1013,10 @@ class DAOD_PHYSLITE_Converter:
             c['charge'][i, :n] = ak.to_numpy(_s("AnalysisTauJetsAuxDyn.charge"))[si[:n]]
             c['mask'][i, :n]   = True
 
-            # is_1prong: 1-prong modes are 0,1,2; 3-prong are 10,11 — same as CMS Tau_decayMode
-            dm_sel = decay_mode[si[:n]]
-            c['is_1prong'][i, :n] = np.where(dm_sel <= 2, 1.0,
-                                    np.where(dm_sel >= 10, 0.0, -1.0))
-
             # ATLAS-specific
             a['NNDecayMode'][i, :n]     = nn_dm[si[:n]]
             a['RNNJetScore'][i, :n]     = ak.to_numpy(_s("AnalysisTauJetsAuxDyn.RNNJetScore"))[si[:n]]
             a['RNNEleScore'][i, :n]     = ak.to_numpy(_s("AnalysisTauJetsAuxDyn.RNNEleScore"))[si[:n]]
-            a['EleRNNLoose_v1'][i, :n]  = ak.to_numpy(_s("AnalysisTauJetsAuxDyn.EleRNNLoose_v1"))[si[:n]]
-            a['EleRNNMedium_v1'][i, :n] = ak.to_numpy(_s("AnalysisTauJetsAuxDyn.EleRNNMedium_v1"))[si[:n]]
-            a['EleRNNTight_v1'][i, :n]  = ak.to_numpy(_s("AnalysisTauJetsAuxDyn.EleRNNTight_v1"))[si[:n]]
 
         return {'common': c, 'atlas': a}
 
@@ -988,11 +1047,32 @@ class DAOD_PHYSLITE_Converter:
             j_eta = ev["AnalysisJetsAuxDyn.eta"]
             pm = (j_pt_mev > self.config.jet_pt_cut) & (abs(j_eta) < self.config.jet_eta_cut)
 
-            # Jet cleaning: LooseBad flag
-            if self.config.jet_clean_loose:
-                j_clean = _safe_get(ev, "AnalysisJetsAuxDyn.DFCommonJets_jetClean_LooseBad")
-                if j_clean is not None:
-                    pm = pm & (j_clean > 0)
+            # Pile-up rejection: NNJvt (central) + fJvt (forward)
+            # Only applied to jets below jet_jvt_pt_max (default 60 GeV)
+            if self.config.jet_apply_jvt:
+                abs_eta = abs(j_eta)
+                low_pt = j_pt_mev < self.config.jet_jvt_pt_max
+
+                # NNJvt for central jets (|eta| < 2.4, pT < 60 GeV)
+                # Use NNJvtPass flag if available, otherwise skip
+                is_central = abs_eta < self.config.jet_jvt_eta_max
+                needs_nnjvt = low_pt & is_central
+                nnjvt_pass = _safe_get(ev, "AnalysisJetsAuxDyn.NNJvtPass")
+                if nnjvt_pass is not None:
+                    # NNJvtPass: 1 = pass, 0 = fail
+                    pm = pm & (~needs_nnjvt | (nnjvt_pass > 0))
+                else:
+                    # Fallback: use NNJvt score > 0.2 (approximate default WP)
+                    nnjvt_score = _safe_get(ev, "AnalysisJetsAuxDyn.NNJvt")
+                    if nnjvt_score is not None:
+                        pm = pm & (~needs_nnjvt | (nnjvt_score > 0.2))
+
+                # fJvt for forward jets (|eta| > 2.5, pT < 60 GeV)
+                is_forward = abs_eta > self.config.jet_fjvt_eta_min
+                needs_fjvt = low_pt & is_forward
+                fjvt = _safe_get(ev, "AnalysisJetsAuxDyn.DFCommonJets_fJvt")
+                if fjvt is not None:
+                    pm = pm & (~needs_fjvt | (abs(fjvt) < self.config.jet_fjvt_cut))
 
             def _s(name):
                 v = _safe_get(ev, name)
@@ -1477,9 +1557,18 @@ class DAOD_PHYSLITE_Converter:
             meta.attrs['muon_z0sintheta_cut_mm'] = cfg.muon_z0sintheta_cut
             meta.attrs['muon_calo_pt_cut_gev']   = cfg.muon_calo_pt_cut * MeV
             meta.attrs['photon_require_loose']   = cfg.photon_require_loose
+            meta.attrs['photon_eta_max']         = cfg.photon_eta_max
+            meta.attrs['photon_veto_crack']      = cfg.photon_veto_crack
+            meta.attrs['tau_eta_cut']            = cfg.tau_eta_cut
+            meta.attrs['tau_veto_crack']         = cfg.tau_veto_crack
+            meta.attrs['tau_require_ntracks_1or3'] = cfg.tau_require_ntracks_1or3
+            meta.attrs['tau_require_charge1']    = cfg.tau_require_charge1
             meta.attrs['tau_rnn_jet_cut']        = cfg.tau_rnn_jet_cut
             meta.attrs['jet_eta_cut']            = cfg.jet_eta_cut
-            meta.attrs['jet_clean_loose']        = cfg.jet_clean_loose
+            meta.attrs['event_clean_loose']      = cfg.event_clean_loose
+            meta.attrs['jet_apply_jvt']          = cfg.jet_apply_jvt
+            meta.attrs['jet_jvt_pt_max_gev']     = cfg.jet_jvt_pt_max * MeV
+            meta.attrs['jet_fjvt_cut']           = cfg.jet_fjvt_cut
             meta.attrs['track_eta_cut']          = cfg.track_eta_cut
             meta.attrs['track_d0_cut_mm']        = cfg.track_d0_cut
             meta.attrs['track_z0sintheta_cut_mm'] = cfg.track_z0sintheta_cut
@@ -1506,7 +1595,7 @@ class DAOD_PHYSLITE_Converter:
                 'common': {
                     'electrons': ['pt','eta','phi','charge','trk_iso03','mask','n'],
                     'muons':     ['pt','eta','phi','charge','trk_iso03','mask','n'],
-                    'taus':      ['pt','eta','phi','charge','is_1prong','mask','n'],
+                    'taus':      ['pt','eta','phi','charge','mask','n'],
                     'photons':   ['pt','eta','phi','trk_iso03','mask','n'],
                     'jets':      ['pt','eta','phi','mass','n_trk','mask','n'],
                     'tracks':    ['pt','eta','phi','d0','z0','mask','n'],
@@ -1514,10 +1603,10 @@ class DAOD_PHYSLITE_Converter:
                     'event':     ['pvx','pvy','pvz','mu','experiment_id','is_simulation'],
                 },
                 'atlas': {
-                    'electrons': ['mass','LHLoose','LHMedium','LHTight','topoetcone20','ptvarcone30'],
-                    'muons':     ['quality','muonType','passIDCuts','passPresel','topoetcone20','ptvarcone30'],
-                    'taus':      ['NNDecayMode','RNNJetScore','RNNEleScore','EleRNNLoose_v1','EleRNNMedium_v1','EleRNNTight_v1'],
-                    'photons':   ['isLoose','isTight','isCleaning','author','topoetcone20','topoetcone40','ptcone20'],
+                    'electrons': ['mass','LHMedium','LHTight','topoetcone20','ptvarcone30'],
+                    'muons':     ['topoetcone20','ptvarcone30'],
+                    'taus':      ['NNDecayMode','RNNJetScore','RNNEleScore'],
+                    'photons':   ['isTight','topoetcone20','topoetcone40','ptcone20'],
                     'jets':      ['DL1d_pb','DL1d_pc','DL1d_pu','GN2_pb','GN2_pc','GN2_pu','QG_nTracks','QG_tracksWidth','QG_tracksC1'],
                     'tracks':    ['qOverP','chiSquared','nDoF'],
                     'event':     ['event_number','run_number','mcChannelNumber'],
