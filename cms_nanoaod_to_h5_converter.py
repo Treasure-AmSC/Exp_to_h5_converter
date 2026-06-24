@@ -3,7 +3,7 @@
 CMS NanoAOD → HDF5 Converter  (v2.1 — cross-experiment edition)
 ================================================================
 
-Converts CMS Run 2 Open Data (NanoAODv9 format) into analysis-ready HDF5
+Converts CMS Run 2 Open Data (NanoAODv9 or PFNanoAODv1 format) into analysis-ready HDF5
 files matching the same schema as the ATLAS PHYSLITE converter. Both
 experiments produce identical /common/ keys so the foundation model can
 train on combined ATLAS+CMS data with experiment_id as a conditioning token.
@@ -23,7 +23,7 @@ Schema
   common/taus      : pt, eta, phi, charge, is_1prong, mask, n
   common/photons   : pt, eta, phi, trk_iso03, mask, n
   common/jets      : pt, eta, phi, mass, n_trk, mask, n
-  common/tracks    : (not available in NanoAOD — left empty)
+  common/tracks    : pt, eta, phi, d0, z0, mask, n  (from PFCands if PFNano)
   common/met       : pt, phi, sumet
   common/event     : pvx, pvy, pvz, mu, experiment_id, is_simulation
 
@@ -37,6 +37,8 @@ Schema
                      pfRelIso03_all
   cms/jets         : btagDeepFlavB, btagDeepFlavC, btagDeepFlavQG,
                      jetId, puId, qgl, nConstituents, nMuons
+  cms/pfcands      : pt, eta, phi, mass, charge, pdgId, d0, dz,
+                     puppiWeight, trkChi2, trkQuality, n, mask
   cms/event        : event, run, luminosityBlock
 
   truth/electrons  : pt, eta, phi, mass, pdgId, status, n, mask
@@ -61,9 +63,17 @@ Isolation mapping (trk_iso03)
   (Not identical to ATLAS track-only isolation, but conceptually similar.
    Use experiment_id conditioning to account for the difference.)
 
+PFCands (PFNano only)
+---------------------
+  When PFCands branches are present (PFNano format), the converter:
+    - Fills common/tracks with charged PFCands (pT > 0.5 GeV, pT-sorted),
+      matching the ATLAS track schema (pt, eta, phi, d0, z0).
+    - Stores all PFCands (charged + neutral, pT > 0.2 GeV) in cms/pfcands.
+  When PFCands are absent (standard NanoAOD), common/tracks is left empty.
+
 Input format
 ------------
-  CMS NanoAODv9 ROOT files from CERN Open Data Portal.
+  CMS NanoAODv9 or PFNanoAODv1 ROOT files from CERN Open Data Portal.
   Tree name: "Events"
   All branches use flat arrays: nElectron, Electron_pt[nElectron], etc.
 
@@ -89,10 +99,12 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
-CONVERTER_VERSION = "2.1.0"
+CONVERTER_VERSION = "2.2.0"
 EXPERIMENT_ID  = 1          # 0 = ATLAS, 1 = CMS
 
 CONVERTER_CHANGELOG = {
+    "2.2.0": "Add PFNano support: PFCands -> common/tracks (charged) + cms/pfcands (all). "
+             "Fallback to empty tracks for standard NanoAOD.",
     "2.1.0": "Initial CMS NanoAODv9 converter. Cross-experiment format matching "
              "ATLAS converter v2.1.0. Loose quality cuts, truth particles, metadata.",
 }
@@ -124,8 +136,12 @@ class CMSObjectConfig:
     jet_eta_cut: float = 4.7
     jet_min_id: int = 2               # >= 2 = tight
 
+    pfcand_pt_cut: float = 0.5        # GeV (charged PFCands for common/tracks)
+    pfcand_pt_cut_all: float = 0.2    # GeV (all PFCands for cms/pfcands)
+
     max_objects: int = 20
-    max_tracks: int = 50              # NanoAOD has no tracks — placeholder
+    max_tracks: int = 50               # charged PFCands → common/tracks
+    max_pfcands: int = 500             # all PFCands → cms/pfcands
 
 
 # ── Branch lists ──────────────────────────────────────────────────────────────
@@ -179,6 +195,15 @@ MET_BRANCHES = [
     "MET_pt", "MET_phi", "MET_sumEt",
 ]
 
+PFCAND_BRANCHES = [
+    "nPFCands",
+    "PFCands_pt", "PFCands_eta", "PFCands_phi", "PFCands_mass",
+    "PFCands_charge", "PFCands_pdgId",
+    "PFCands_d0", "PFCands_dz",
+    "PFCands_puppiWeight",
+    "PFCands_trkChi2", "PFCands_trkQuality",
+]
+
 EVENT_BRANCHES = [
     "event", "run", "luminosityBlock",
     "PV_x", "PV_y", "PV_z",
@@ -229,8 +254,8 @@ class CMSNanoAODConverter:
 
         all_branches = []
         for bl in [ELECTRON_BRANCHES, MUON_BRANCHES, PHOTON_BRANCHES,
-                   TAU_BRANCHES, JET_BRANCHES, MET_BRANCHES, EVENT_BRANCHES,
-                   GEN_BRANCHES]:
+                   TAU_BRANCHES, JET_BRANCHES, PFCAND_BRANCHES,
+                   MET_BRANCHES, EVENT_BRANCHES, GEN_BRANCHES]:
             all_branches.extend(_get_available(tree, bl))
 
         events = tree.arrays(all_branches, library="ak")
@@ -239,12 +264,15 @@ class CMSNanoAODConverter:
 
         has_truth = "nGenPart" in events.fields
 
+        has_pfcands = "nPFCands" in events.fields
+
         result = {
             'electrons': self._process_electrons(events),
             'muons':     self._process_muons(events),
             'photons':   self._process_photons(events),
             'taus':      self._process_taus(events),
             'jets':      self._process_jets(events),
+            'pfcands':   self._process_pfcands(events) if has_pfcands else None,
             'tracks':    self._process_tracks(events),
             'met':       self._process_met(events),
             'event_info': self._process_event_info(events),
@@ -526,14 +554,92 @@ class CMSNanoAODConverter:
 
         return {'common': c, 'cms': cms}
 
+    def _process_pfcands(self, events) -> Dict:
+        """Process PFCands from PFNano into cms/pfcands (all PFCands, charged + neutral)."""
+        logger.info("Processing PFCands...")
+        n_events = len(events)
+        mx = self.config.max_pfcands
+
+        cms = {k: np.zeros((n_events, mx), dtype=np.float32)
+               for k in ['pt', 'eta', 'phi', 'mass', 'charge', 'pdgId',
+                          'd0', 'dz', 'puppiWeight', 'trkChi2', 'trkQuality']}
+        cms['n'] = np.zeros(n_events, dtype=np.int32)
+        cms['mask'] = np.zeros((n_events, mx), dtype=bool)
+
+        for i, ev in enumerate(events):
+            pt = _safe(ev, "PFCands_pt")
+            if pt is None:
+                continue
+            pt_np = ak.to_numpy(pt)
+
+            pm = pt_np > self.config.pfcand_pt_cut_all
+            idx = np.where(pm)[0]
+            n = min(len(idx), mx)
+            if n == 0:
+                continue
+            si = idx[np.argsort(pt_np[idx])[::-1][:n]]
+
+            cms['pt'][i, :n]  = pt_np[si]
+            cms['eta'][i, :n] = ak.to_numpy(ev["PFCands_eta"])[si]
+            cms['phi'][i, :n] = ak.to_numpy(ev["PFCands_phi"])[si]
+            cms['n'][i] = n
+            cms['mask'][i, :n] = True
+
+            for key, branch in [('mass', 'PFCands_mass'),
+                                ('charge', 'PFCands_charge'),
+                                ('pdgId', 'PFCands_pdgId'),
+                                ('d0', 'PFCands_d0'), ('dz', 'PFCands_dz'),
+                                ('puppiWeight', 'PFCands_puppiWeight'),
+                                ('trkChi2', 'PFCands_trkChi2'),
+                                ('trkQuality', 'PFCands_trkQuality')]:
+                v = _safe(ev, branch)
+                if v is not None:
+                    cms[key][i, :n] = ak.to_numpy(v)[si]
+
+        logger.info(f"  PFCands: avg {cms['n'].mean():.0f} per event (max_pfcands={mx})")
+        return {'cms': cms}
+
     def _process_tracks(self, events) -> Dict:
-        """NanoAOD does not contain track collections. Return empty placeholder."""
+        """Fill common/tracks from charged PFCands (PFNano) or leave empty (NanoAOD)."""
         n_events = len(events)
         mx = self.config.max_tracks
         c = {k: np.zeros((n_events, mx), dtype=np.float32)
              for k in ['pt', 'eta', 'phi', 'd0', 'z0']}
         c['n'] = np.zeros(n_events, dtype=np.int32)
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
+
+        if "nPFCands" not in events.fields:
+            return {'common': c, 'cms': {}}
+
+        logger.info("Filling common/tracks from charged PFCands...")
+        for i, ev in enumerate(events):
+            pt = _safe(ev, "PFCands_pt")
+            if pt is None:
+                continue
+            pt_np = ak.to_numpy(pt)
+            ch = _safe(ev, "PFCands_charge")
+            if ch is None:
+                continue
+            ch_np = ak.to_numpy(ch)
+
+            pm = (pt_np > self.config.pfcand_pt_cut) & (ch_np != 0)
+            idx = np.where(pm)[0]
+            n = min(len(idx), mx)
+            if n == 0:
+                continue
+            si = idx[np.argsort(pt_np[idx])[::-1][:n]]
+
+            c['pt'][i, :n]  = pt_np[si]
+            c['eta'][i, :n] = ak.to_numpy(ev["PFCands_eta"])[si]
+            c['phi'][i, :n] = ak.to_numpy(ev["PFCands_phi"])[si]
+            d0 = _safe(ev, "PFCands_d0")
+            if d0 is not None: c['d0'][i, :n] = ak.to_numpy(d0)[si]
+            dz = _safe(ev, "PFCands_dz")
+            if dz is not None: c['z0'][i, :n] = ak.to_numpy(dz)[si]
+            c['n'][i] = n
+            c['mask'][i, :n] = True
+
+        logger.info(f"  Tracks (charged PFCands): avg {c['n'].mean():.0f} per event")
         return {'common': c, 'cms': {}}
 
     def _process_met(self, events) -> Dict:
@@ -760,6 +866,11 @@ class CMSNanoAODConverter:
                     for key, arr in data[obj]['cms'].items():
                         sub.create_dataset(key, data=arr, compression='gzip', compression_opts=4)
 
+            if data.get('pfcands') and data['pfcands'].get('cms'):
+                sub = grp_x.create_group('pfcands')
+                for key, arr in data['pfcands']['cms'].items():
+                    sub.create_dataset(key, data=arr, compression='gzip', compression_opts=4)
+
             grp_xev = grp_x.create_group('event')
             for key, arr in data['event_info']['cms'].items():
                 grp_xev.create_dataset(key, data=arr, compression='gzip')
@@ -787,7 +898,9 @@ class CMSNanoAODConverter:
             meta.attrs['converter_changelog'] = CONVERTER_CHANGELOG.get(CONVERTER_VERSION, '')
             meta.attrs['input_file']          = str(Path(input_file).name)
             meta.attrs['n_events']            = n_events
-            meta.attrs['input_format']        = 'NanoAODv9'
+            has_pfcands = data.get('pfcands') is not None
+            meta.attrs['input_format']        = 'PFNanoAOD' if has_pfcands else 'NanoAODv9'
+            meta.attrs['has_pfcands']         = has_pfcands
             meta.attrs['sqrt_s_tev']          = 13.0
             meta.attrs['license']             = 'CC0-1.0'
 
@@ -803,6 +916,8 @@ class CMSNanoAODConverter:
             meta.attrs['jet_pt_cut_gev']      = cfg.jet_pt_cut
             meta.attrs['jet_eta_cut']         = cfg.jet_eta_cut
             meta.attrs['jet_min_id']          = cfg.jet_min_id
+            meta.attrs['pfcand_pt_cut_gev']   = cfg.pfcand_pt_cut
+            meta.attrs['pfcand_pt_cut_all_gev'] = cfg.pfcand_pt_cut_all
 
         logger.info(f"  Written {n_events} events to {output_file}")
 
