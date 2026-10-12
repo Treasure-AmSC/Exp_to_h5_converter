@@ -211,6 +211,9 @@ EVENT_BRANCHES = [
     "Pileup_nTrueInt",  # MC only
 ]
 
+# Keep the original signed MC weights. Confirm w/ CMS.
+WEIGHT_BRANCHES = ["genWeight", "Generator_weight", "LHEWeight_originalXWGTUP"]
+
 # Truth (MC only)
 GEN_BRANCHES = [
     "nGenPart",
@@ -239,6 +242,37 @@ def _get_available(tree, branch_list):
     return avail
 
 
+def _export_generator_weights(events, input_file):
+    """Read event weights and normalization sums from the input ROOT file."""
+    native = {}
+    for branch in WEIGHT_BRANCHES:
+        if branch in events.fields:
+            values = ak.to_numpy(events[branch]).astype(np.float64)
+            if values.ndim != 1 or not np.isfinite(values).all():
+                raise ValueError(f"Invalid generator weights: {branch}")
+            native[branch] = values
+    chosen = next((b for b in ("genWeight", "Generator_weight") if b in native), None)
+    report = dict(input_file=str(input_file), input_events=len(events), available=chosen is not None,
+                  generator_weight_branch=chosen,
+                  runs_summary_scope="Entire input ROOT, before any CLI truncation",
+                  full_input_runs_summary={})
+    if chosen is not None:
+        weights = native[chosen]
+        native["generator_weight"] = weights.copy()
+        report.update(input_genweight_sum=float(weights.sum()),
+                      input_genweight_sum2=float(np.square(weights).sum()))
+    else:
+        report["missing_reason"] = "No genWeight/Generator_weight branch; no weights synthesized"
+    if chosen is not None or "nGenPart" in events.fields or "Pileup_nTrueInt" in events.fields:
+        with uproot.open(input_file) as root:
+            if "Runs" in root:
+                for branch in ("genEventCount", "genEventSumw", "genEventSumw2"):
+                    if branch in root["Runs"].keys():
+                        values = root["Runs"][branch].array(library="np")
+                        report["full_input_runs_summary"][branch] = np.asarray(values).sum().item()
+    return native, report
+
+
 # ── Converter ─────────────────────────────────────────────────────────────────
 
 class CMSNanoAODConverter:
@@ -255,12 +289,34 @@ class CMSNanoAODConverter:
         all_branches = []
         for bl in [ELECTRON_BRANCHES, MUON_BRANCHES, PHOTON_BRANCHES,
                    TAU_BRANCHES, JET_BRANCHES, PFCAND_BRANCHES,
-                   MET_BRANCHES, EVENT_BRANCHES, GEN_BRANCHES]:
+                   MET_BRANCHES, EVENT_BRANCHES, GEN_BRANCHES, WEIGHT_BRANCHES]:
             all_branches.extend(_get_available(tree, bl))
 
         events = tree.arrays(all_branches, library="ak")
         n = len(events)
         logger.info(f"  {n} events loaded")
+
+        # Confirm w/ CMS before applying the certified luminosity ranges.
+        # event_keep = np.ones(n, dtype=bool)
+        # is_mc = "nGenPart" in events.fields or "Pileup_nTrueInt" in events.fields
+        # if not is_mc:
+        #     with open("certified_lumis.json") as stream:
+        #         certified = json.load(stream)
+        #     event_keep &= np.array([
+        #         any(lo <= int(lumi) <= hi for lo, hi in certified.get(str(int(run)), []))
+        #         for run, lumi in zip(events["run"], events["luminosityBlock"])
+        #     ], dtype=bool)
+        # Confirm w/ CMS which cleaning flags to use for this year and sample.
+        # filter_branches = ["Flag_goodVertices", "Flag_globalSuperTightHalo2016Filter",
+        #                    "Flag_HBHENoiseFilter", "Flag_HBHENoiseIsoFilter",
+        #                    "Flag_EcalDeadCellTriggerPrimitiveFilter", "Flag_BadPFMuonFilter",
+        #                    "Flag_BadPFMuonDzFilter", "Flag_hfNoisyHitsFilter"]
+        # if not is_mc:
+        #     filter_branches.append("Flag_eeBadScFilter")
+        # flags = tree.arrays(filter_branches, library="ak")
+        # for flag in filter_branches:
+        #     event_keep &= ak.to_numpy(flags[flag]) == 1
+        # events = events[event_keep]
 
         has_truth = "nGenPart" in events.fields
 
@@ -280,6 +336,11 @@ class CMSNanoAODConverter:
 
         if has_truth:
             result['truth'] = self._process_truth(events)
+
+        # Save event weights alongside the other CMS event information.
+        weights, report = _export_generator_weights(events, input_file)
+        result['event_info']['cms'].update(weights)
+        result['weight_sources'] = [report]
 
         return result
 
@@ -470,6 +531,13 @@ class CMSNanoAODConverter:
                 dt = _safe(ev, "Tau_idDeepTau2017v2p1VSjet")
                 if dt is not None:
                     pm = pm & (ak.to_numpy(dt) >= self.config.tau_min_deeptau_vsjet)
+
+            # Extra tau gap and charge cuts to confirm w/ CMS.
+            # abs_eta = np.abs(eta_np)
+            # pm = pm & ~((abs_eta > 1.37) & (abs_eta < 1.52))
+            # charge = _safe(ev, "Tau_charge")
+            # if charge is not None:
+            #     pm = pm & (np.abs(ak.to_numpy(charge)) == 1)
 
             idx = np.where(pm)[0]
             n = min(len(idx), mx)
@@ -904,6 +972,18 @@ class CMSNanoAODConverter:
             meta.attrs['sqrt_s_tev']          = 13.0
             meta.attrs['license']             = 'CC0-1.0'
 
+            meta.attrs['data_certification'] = 'not applied'
+            meta.attrs['event_cleaning'] = 'not applied'
+            meta.attrs['additional_tau_gap_charge_cuts'] = 'not applied'
+            # These are weight sums, not luminosity-normalized yields. Confirm w/ CMS.
+            meta.attrs['normalization_status'] = 'Native generator weights; no luminosity normalization'
+            meta.attrs['weight_sources_json'] = json.dumps(data.get('weight_sources', []))
+            weights = data['event_info']['cms'].get('generator_weight')
+            meta.attrs['generator_weights_available'] = weights is not None
+            if weights is not None:
+                meta.attrs['written_genweight_sum'] = float(np.sum(weights, dtype=np.float64))
+                meta.attrs['written_genweight_sum2'] = float(np.sum(np.square(weights), dtype=np.float64))
+
             # Selection cuts
             meta.attrs['electron_pt_cut_gev'] = cfg.electron_pt_cut
             meta.attrs['electron_eta_cut']    = cfg.electron_eta_cut
@@ -971,6 +1051,7 @@ def main():
             if all_data is None:
                 all_data = data
             else:
+                all_data['weight_sources'].extend(data['weight_sources'])
                 # Concatenate
                 for obj_key in all_data:
                     if isinstance(all_data[obj_key], dict):

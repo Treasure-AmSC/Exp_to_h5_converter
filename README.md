@@ -56,3 +56,36 @@ python download_and_convert.py \
 
 H5 files are labelled as `simulation` or `data` 
 
+## CMS ROOT to H5
+
+Run this with `uproot`, `awkward`, `numpy` and `h5py` available in your Python
+environment:
+
+```bash
+python cms_nanoaod_to_h5_converter.py input.root -o output.h5
+```
+
+The same command works for data and MC, using either NanoAOD or PFNano inputs.
+It reads the whole ROOT file. Use a new output filename: an existing H5 will
+be overwritten.
+
+MC generator weights are saved under `cms/event`. The weight sums are also
+saved, but no cross-section or luminosity normalization is applied.
+The commented certification, cleaning and extra tau cuts still need to be
+confirmed with CMS before use.
+
+### How we made the sample files
+
+- `CMS_Tau_data_pfnano.h5`: converted one complete Tau PFNano ROOT file from
+  [CMS record 31315](https://opendata.cern.ch/record/31315).
+- `CMS_TTTo2L2Nu_mc_nanoaod.h5`: converted one complete TTTo2L2Nu NanoAOD ROOT
+  file from [CMS record 67801](https://opendata.cern.ch/record/67801).
+- `ATLAS_data_DAOD_PHYSLITE.37019990._000001.pool.root.1.h5`: copied from our
+  existing ATLAS H5 collection.
+- `ATLAS_mc_DAOD_PHYSLITE.37620644._000012.pool.root.h5`: copied from the same
+  ATLAS collection (ttbar, DSID 410470).
+
+The CMS files were converted one at a time with the command above. The ATLAS
+files were not converted again. The Tau PFNano file contains PF candidates;
+the TTTo2L2Nu NanoAOD file does not, so its track arrays are empty.
+
