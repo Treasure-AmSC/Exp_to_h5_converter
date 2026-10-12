@@ -82,10 +82,8 @@ confirmed with CMS before use.
   file from [CMS record 67801](https://opendata.cern.ch/record/67801).
 - `ATLAS_data_DAOD_PHYSLITE.37019990._000001.pool.root.1.h5`: copied from our
   existing ATLAS H5 collection.
-- `ATLAS_mc_DAOD_PHYSLITE.37620644._000012.pool.root.h5`: copied from the same
-  ATLAS collection (ttbar, DSID 410470).
+- `ATLAS_mc_DAOD_PHYSLITE.37620644._000012.pool.root.h5`: ttbar, DSID 410470.
 
-The CMS files were converted one at a time with the command above. The ATLAS
-files were not converted again. The Tau PFNano file contains PF candidates;
+The Tau PFNano file contains PF candidates;
 the TTTo2L2Nu NanoAOD file does not, so its track arrays are empty.
 
