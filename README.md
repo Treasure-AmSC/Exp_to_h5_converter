@@ -69,8 +69,9 @@ The same command works for data and MC, using either NanoAOD or PFNano inputs.
 It reads the whole ROOT file. Use a new output filename: an existing H5 will
 be overwritten.
 
-MC generator weights are saved under `cms/event`. The weight sums are also
-saved, but no cross-section or luminosity normalization is applied.
+MC generator weights are saved under `cms/event`. The sumw and sumw2 of the
+events written to the H5 are saved in `metadata`; no cross-section or luminosity
+normalization is applied.
 The commented certification, cleaning and extra tau cuts still need to be
 confirmed with CMS before use.
 
