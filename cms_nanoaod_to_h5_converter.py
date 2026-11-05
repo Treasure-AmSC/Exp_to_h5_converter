@@ -3,73 +3,45 @@
 CMS NanoAOD → HDF5 Converter  (v2.1 — cross-experiment edition)
 ================================================================
 
-Converts CMS Run 2 Open Data (NanoAODv9 or PFNanoAODv1 format) into analysis-ready HDF5
-files matching the same schema as the ATLAS PHYSLITE converter. Both
-experiments produce identical /common/ keys so the foundation model can
-train on combined ATLAS+CMS data with experiment_id as a conditioning token.
+Converts CMS Run 2 Open Data (NanoAODv9 or PFNanoAODv1) into padded HDF5
+with the object fields and common selections used in the CMS study.
 
 HDF5 Layout
 -----------
-  /common/    — Cross-experiment variables (same keys as ATLAS converter).
+  /common/    — Common object variables and experiment metadata.
                 All energies/momenta in GeV, angles in radians.
   /cms/       — CMS-specific variables (MVA ID scores, DeepJet, etc.).
-  /truth/     — MC truth (GenPart, GenJet, GenMET). Only present for simulation.
   /metadata   — Converter version, dataset info, selection cuts.
 
 Schema
 ------
-  common/electrons : pt, eta, phi, charge, trk_iso03, mask, n
-  common/muons     : pt, eta, phi, charge, trk_iso03, mask, n
-  common/taus      : pt, eta, phi, charge, is_1prong, mask, n
-  common/photons   : pt, eta, phi, trk_iso03, mask, n
-  common/jets      : pt, eta, phi, mass, n_trk, mask, n
-  common/tracks    : pt, eta, phi, d0, z0, mask, n  (from PFCands if PFNano)
-  common/met       : pt, phi, sumet
-  common/event     : pvx, pvy, pvz, mu, experiment_id, is_simulation
+  common/electrons : pt, eta, phi, charge, mask, n
+  common/muons     : pt, eta, phi, charge, mask, n
+  common/taus      : pt, eta, phi, charge, mask, n
+  common/photons   : pt, eta, phi, mask, n
+  common/jets      : pt, eta, phi, mass, mask, n
+  common/event     : experiment_id, is_simulation
 
-  cms/electrons    : mvaIso, mvaIso_WP80, mvaIso_WP90, mvaIso_WPL,
-                     cutBased, pfRelIso03_all, dxy, dz, mass
-  cms/muons        : looseId, mediumId, tightId, pfRelIso04_all,
-                     pfRelIso03_all, dxy, dz
+  cms/electrons    : mvaIso, mvaFall17V2noIso_WPL, cutBased,
+                     pfRelIso03_all, miniPFRelIso_chg
+  cms/muons        : looseId, mediumId, tightId, pfRelIso03_all, miniPFRelIso_chg
   cms/taus         : idDeepTau2017v2p1VSjet, idDeepTau2017v2p1VSe,
                      idDeepTau2017v2p1VSmu, decayMode, rawDeepTau2017v2p1VSjet
-  cms/photons      : cutBased, mvaID, mvaID_WP80, mvaID_WP90,
-                     pfRelIso03_all
-  cms/jets         : btagDeepFlavB, btagDeepFlavC, btagDeepFlavQG,
-                     jetId, puId, qgl, nConstituents, nMuons
-  cms/pfcands      : pt, eta, phi, mass, charge, pdgId, d0, dz,
-                     puppiWeight, trkChi2, trkQuality, n, mask
-  cms/event        : event, run, luminosityBlock
-
-  truth/electrons  : pt, eta, phi, mass, pdgId, status, n, mask
-  truth/muons      : pt, eta, phi, mass, pdgId, status, n, mask
-  truth/taus       : pt, eta, phi, mass, pdgId, status, n, mask
-  truth/jets       : pt, eta, phi, mass, n, mask   (GenJet AK4)
-  truth/met        : pt, phi
+  cms/photons      : cutBased, mvaID, electronVeto, pfRelIso03_all, pfRelIso03_chg
+  cms/jets         : btagDeepFlavB, btagDeepFlavCvL, btagDeepFlavCvB, btagDeepFlavQG,
+                     jetId, nConstituents
+  cms/event        : event, run, luminosityBlock and available generator weights
 
 Object Selection
 ----------------
-  Electrons:  pT > 7 GeV, |eta| < 2.5, mvaFall17V2Iso_WPL (loose MVA ID)
-  Muons:      pT > 5 GeV, |eta| < 2.4, looseId
-  Photons:    pT > 10 GeV, |eta| < 2.5, cutBased >= 1 (loose)
-  Taus:       pT > 20 GeV, |eta| < 2.3, idDeepTau2017v2p1VSjet >= 2 (VVLoose)
-  Jets:       pT > 30 GeV, |eta| < 4.7, jetId >= 2 (tight)
+  Electrons:  pT > 10 GeV, |eta| < 2.47, mvaFall17V2noIso_WPL
+  Muons:      pT > 10 GeV, |eta| < 2.5, looseId
+  Photons:    pT > 15 GeV, |eta| < 2.37, cutBased >= 1, electron veto, eta gap
+  Taus:       pT > 20 GeV, |eta| < 2.5, VSjet bit 8, unit charge, eta gap
+  Jets:       pT > 20 GeV, |eta| < 4.5, jetId bit 2
 
-Isolation mapping (trk_iso03)
------------------------------
-  Electrons: pfRelIso03_all  (PF-based, ΔR < 0.3)
-  Muons:     pfRelIso03_all  (PF-based, ΔR < 0.3)
-  Photons:   pfRelIso03_all
-  (Not identical to ATLAS track-only isolation, but conceptually similar.
-   Use experiment_id conditioning to account for the difference.)
-
-PFCands (PFNano only)
----------------------
-  When PFCands branches are present (PFNano format), the converter:
-    - Fills common/tracks with charged PFCands (pT > 0.5 GeV, pT-sorted),
-      matching the ATLAS track schema (pt, eta, phi, d0, z0).
-    - Stores all PFCands (charged + neutral, pT > 0.2 GeV) in cms/pfcands.
-  When PFCands are absent (standard NanoAOD), common/tracks is left empty.
+  The MC study's event-cleaning flags are applied to simulated inputs.
+  PF candidate branches may be present but are not read or exported.
 
 Input format
 ------------
@@ -116,25 +88,25 @@ GeV = 1.0  # NanoAOD already stores pT in GeV
 
 @dataclass
 class CMSObjectConfig:
-    electron_pt_cut: float = 7.0      # GeV
-    electron_eta_cut: float = 2.5
-    electron_require_mva_loose: bool = True  # mvaFall17V2Iso_WPL
+    electron_pt_cut: float = 10.0     # GeV
+    electron_eta_cut: float = 2.47
+    electron_require_mva_loose: bool = True  # mvaFall17V2noIso_WPL
 
-    muon_pt_cut: float = 5.0          # GeV
-    muon_eta_cut: float = 2.4
+    muon_pt_cut: float = 10.0         # GeV
+    muon_eta_cut: float = 2.5
     muon_require_loose: bool = True    # looseId
 
-    photon_pt_cut: float = 10.0       # GeV
-    photon_eta_cut: float = 2.5
+    photon_pt_cut: float = 15.0       # GeV
+    photon_eta_cut: float = 2.37
     photon_min_cutbased: int = 1      # >= 1 = loose
 
     tau_pt_cut: float = 20.0          # GeV
-    tau_eta_cut: float = 2.3
-    tau_min_deeptau_vsjet: int = 2    # >= 2 = VVLoose
+    tau_eta_cut: float = 2.5
+    tau_min_deeptau_vsjet: int = 8    # require the loose VSjet bit
 
-    jet_pt_cut: float = 30.0          # GeV
-    jet_eta_cut: float = 4.7
-    jet_min_id: int = 2               # >= 2 = tight
+    jet_pt_cut: float = 20.0          # GeV
+    jet_eta_cut: float = 4.5
+    jet_min_id: int = 2               # require the tight ID bit
 
     pfcand_pt_cut: float = 0.5        # GeV (charged PFCands for common/tracks)
     pfcand_pt_cut_all: float = 0.2    # GeV (all PFCands for cms/pfcands)
@@ -148,34 +120,31 @@ class CMSObjectConfig:
 
 ELECTRON_BRANCHES = [
     "nElectron",
-    "Electron_pt", "Electron_eta", "Electron_phi", "Electron_mass",
+    "Electron_pt", "Electron_eta", "Electron_phi",
     "Electron_charge",
-    "Electron_pfRelIso03_all",
-    "Electron_mvaFall17V2Iso", "Electron_mvaFall17V2Iso_WP80",
-    "Electron_mvaFall17V2Iso_WP90", "Electron_mvaFall17V2Iso_WPL",
+    "Electron_pfRelIso03_all", "Electron_miniPFRelIso_chg",
+    "Electron_mvaFall17V2Iso", "Electron_mvaFall17V2noIso_WPL",
     "Electron_cutBased",
-    "Electron_dxy", "Electron_dz",
 ]
 
 MUON_BRANCHES = [
     "nMuon",
-    "Muon_pt", "Muon_eta", "Muon_phi", "Muon_mass",
+    "Muon_pt", "Muon_eta", "Muon_phi",
     "Muon_charge",
     "Muon_looseId", "Muon_mediumId", "Muon_tightId",
-    "Muon_pfRelIso03_all", "Muon_pfRelIso04_all",
-    "Muon_dxy", "Muon_dz",
+    "Muon_pfRelIso03_all", "Muon_miniPFRelIso_chg",
 ]
 
 PHOTON_BRANCHES = [
     "nPhoton",
-    "Photon_pt", "Photon_eta", "Photon_phi", "Photon_mass",
-    "Photon_pfRelIso03_all",
-    "Photon_cutBased", "Photon_mvaID", "Photon_mvaID_WP80", "Photon_mvaID_WP90",
+    "Photon_pt", "Photon_eta", "Photon_phi",
+    "Photon_pfRelIso03_all", "Photon_pfRelIso03_chg",
+    "Photon_cutBased", "Photon_mvaID", "Photon_electronVeto",
 ]
 
 TAU_BRANCHES = [
     "nTau",
-    "Tau_pt", "Tau_eta", "Tau_phi", "Tau_mass",
+    "Tau_pt", "Tau_eta", "Tau_phi",
     "Tau_charge", "Tau_decayMode",
     "Tau_idDeepTau2017v2p1VSjet", "Tau_idDeepTau2017v2p1VSe",
     "Tau_idDeepTau2017v2p1VSmu",
@@ -185,46 +154,20 @@ TAU_BRANCHES = [
 JET_BRANCHES = [
     "nJet",
     "Jet_pt", "Jet_eta", "Jet_phi", "Jet_mass",
-    "Jet_jetId", "Jet_puId",
-    "Jet_btagDeepFlavB", "Jet_btagDeepFlavC", "Jet_btagDeepFlavQG",
-    "Jet_nConstituents", "Jet_nMuons",
-    "Jet_qgl",
+    "Jet_jetId", "Jet_nConstituents",
+    "Jet_btagDeepFlavB", "Jet_btagDeepFlavCvL", "Jet_btagDeepFlavCvB", "Jet_btagDeepFlavQG",
 ]
 
-MET_BRANCHES = [
-    "MET_pt", "MET_phi", "MET_sumEt",
-]
-
-PFCAND_BRANCHES = [
-    "nPFCands",
-    "PFCands_pt", "PFCands_eta", "PFCands_phi", "PFCands_mass",
-    "PFCands_charge", "PFCands_pdgId",
-    "PFCands_d0", "PFCands_dz",
-    "PFCands_puppiWeight",
-    "PFCands_trkChi2", "PFCands_trkQuality",
-]
-
-EVENT_BRANCHES = [
-    "event", "run", "luminosityBlock",
-    "PV_x", "PV_y", "PV_z",
-    "PV_npvsGood",
-    "Pileup_nTrueInt",  # MC only
+EVENT_BRANCHES = ["event", "run", "luminosityBlock"]
+MC_EVENT_FILTERS = [
+    "Flag_goodVertices", "Flag_globalSuperTightHalo2016Filter",
+    "Flag_HBHENoiseFilter", "Flag_HBHENoiseIsoFilter",
+    "Flag_EcalDeadCellTriggerPrimitiveFilter", "Flag_BadPFMuonFilter",
+    "Flag_BadPFMuonDzFilter", "Flag_hfNoisyHitsFilter",
 ]
 
 # Keep the original signed MC weights. Confirm w/ CMS.
 WEIGHT_BRANCHES = ["genWeight", "Generator_weight", "LHEWeight_originalXWGTUP"]
-
-# Truth (MC only)
-GEN_BRANCHES = [
-    "nGenPart",
-    "GenPart_pt", "GenPart_eta", "GenPart_phi", "GenPart_mass",
-    "GenPart_pdgId", "GenPart_status", "GenPart_statusFlags",
-    "GenPart_genPartIdxMother",
-    "nGenJet",
-    "GenJet_pt", "GenJet_eta", "GenJet_phi", "GenJet_mass",
-    "GenMET_pt", "GenMET_phi",
-]
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -270,41 +213,25 @@ class CMSNanoAODConverter:
 
         tree = uproot.open(f"{input_file}:Events")
 
-        all_branches = []
-        for bl in [ELECTRON_BRANCHES, MUON_BRANCHES, PHOTON_BRANCHES,
-                   TAU_BRANCHES, JET_BRANCHES, PFCAND_BRANCHES,
-                   MET_BRANCHES, EVENT_BRANCHES, GEN_BRANCHES, WEIGHT_BRANCHES]:
-            all_branches.extend(_get_available(tree, bl))
-
+        available = set(tree.keys())
+        is_mc = bool(available.intersection(("nGenPart", "Pileup_nTrueInt", *WEIGHT_BRANCHES)))
+        all_branches = [*ELECTRON_BRANCHES, *MUON_BRANCHES, *PHOTON_BRANCHES,
+                        *TAU_BRANCHES, *JET_BRANCHES, *EVENT_BRANCHES]
+        if is_mc:
+            all_branches.extend(MC_EVENT_FILTERS)
+        missing = sorted(set(all_branches) - available)
+        if missing:
+            raise ValueError(f"{input_file}: missing CMS study branches: {', '.join(missing)}")
+        all_branches.extend(_get_available(tree, WEIGHT_BRANCHES))
         events = tree.arrays(all_branches, library="ak")
         n = len(events)
         logger.info(f"  {n} events loaded")
 
-        # Confirm w/ CMS before applying the certified luminosity ranges.
-        # event_keep = np.ones(n, dtype=bool)
-        # is_mc = "nGenPart" in events.fields or "Pileup_nTrueInt" in events.fields
-        # if not is_mc:
-        #     with open("certified_lumis.json") as stream:
-        #         certified = json.load(stream)
-        #     event_keep &= np.array([
-        #         any(lo <= int(lumi) <= hi for lo, hi in certified.get(str(int(run)), []))
-        #         for run, lumi in zip(events["run"], events["luminosityBlock"])
-        #     ], dtype=bool)
-        # Confirm w/ CMS which cleaning flags to use for this year and sample.
-        # filter_branches = ["Flag_goodVertices", "Flag_globalSuperTightHalo2016Filter",
-        #                    "Flag_HBHENoiseFilter", "Flag_HBHENoiseIsoFilter",
-        #                    "Flag_EcalDeadCellTriggerPrimitiveFilter", "Flag_BadPFMuonFilter",
-        #                    "Flag_BadPFMuonDzFilter", "Flag_hfNoisyHitsFilter"]
-        # if not is_mc:
-        #     filter_branches.append("Flag_eeBadScFilter")
-        # flags = tree.arrays(filter_branches, library="ak")
-        # for flag in filter_branches:
-        #     event_keep &= ak.to_numpy(flags[flag]) == 1
-        # events = events[event_keep]
-
-        has_truth = "nGenPart" in events.fields
-
-        has_pfcands = "nPFCands" in events.fields
+        if is_mc:
+            event_keep = np.ones(n, dtype=bool)
+            for flag in MC_EVENT_FILTERS:
+                event_keep &= ak.to_numpy(events[flag]) == 1
+            events = events[event_keep]
 
         result = {
             'electrons': self._process_electrons(events),
@@ -312,14 +239,10 @@ class CMSNanoAODConverter:
             'photons':   self._process_photons(events),
             'taus':      self._process_taus(events),
             'jets':      self._process_jets(events),
-            'pfcands':   self._process_pfcands(events) if has_pfcands else None,
-            'tracks':    self._process_tracks(events),
-            'met':       self._process_met(events),
-            'event_info': self._process_event_info(events),
+            # Only retain PFNano input detection for the old metadata.
+            'pfcands':   {} if "nPFCands" in available else None,
+            'event_info': self._process_event_info(events, is_mc),
         }
-
-        if has_truth:
-            result['truth'] = self._process_truth(events)
 
         # Save event weights alongside the other CMS event information.
         result['event_info']['cms'].update(_export_generator_weights(events))
@@ -332,13 +255,13 @@ class CMSNanoAODConverter:
         n_events = len(events)
         mx = self.config.max_objects
         c = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['pt', 'eta', 'phi', 'charge', 'trk_iso03']}
+             for k in ['pt', 'eta', 'phi', 'charge']}
         c['n'] = np.zeros(n_events, dtype=np.int32)
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
         cms = {k: np.zeros((n_events, mx), dtype=np.float32)
-               for k in ['mvaIso', 'mvaIso_WP80', 'mvaIso_WP90', 'mvaIso_WPL',
-                         'cutBased', 'pfRelIso03_all', 'dxy', 'dz', 'mass']}
+               for k in ['mvaIso', 'mvaFall17V2noIso_WPL', 'cutBased',
+                         'pfRelIso03_all', 'miniPFRelIso_chg']}
 
         for i, ev in enumerate(events):
             pt = _safe(ev, "Electron_pt")
@@ -348,11 +271,11 @@ class CMSNanoAODConverter:
             eta_np = ak.to_numpy(ev["Electron_eta"])
 
             # Selection
-            pm = (pt_np > self.config.electron_pt_cut) & (np.abs(eta_np) < self.config.electron_eta_cut)
+            pm = np.isfinite(pt_np) & (pt_np > self.config.electron_pt_cut) & (np.abs(eta_np) < self.config.electron_eta_cut)
             if self.config.electron_require_mva_loose:
-                wpl = _safe(ev, "Electron_mvaFall17V2Iso_WPL")
+                wpl = _safe(ev, "Electron_mvaFall17V2noIso_WPL")
                 if wpl is not None:
-                    pm = pm & (ak.to_numpy(wpl) > 0)
+                    pm = pm & (ak.to_numpy(wpl) == 1)
 
             idx = np.where(pm)[0]
             n = min(len(idx), mx)
@@ -365,20 +288,15 @@ class CMSNanoAODConverter:
             c['phi'][i, :n]    = ak.to_numpy(ev["Electron_phi"])[si]
             ch = _safe(ev, "Electron_charge")
             if ch is not None: c['charge'][i, :n] = ak.to_numpy(ch)[si]
-            iso = _safe(ev, "Electron_pfRelIso03_all")
-            if iso is not None: c['trk_iso03'][i, :n] = ak.to_numpy(iso)[si]
             c['n'][i] = n
             c['mask'][i, :n] = True
 
             # CMS-specific
             for key, branch in [('mvaIso', 'Electron_mvaFall17V2Iso'),
-                                ('mvaIso_WP80', 'Electron_mvaFall17V2Iso_WP80'),
-                                ('mvaIso_WP90', 'Electron_mvaFall17V2Iso_WP90'),
-                                ('mvaIso_WPL', 'Electron_mvaFall17V2Iso_WPL'),
+                                ('mvaFall17V2noIso_WPL', 'Electron_mvaFall17V2noIso_WPL'),
                                 ('cutBased', 'Electron_cutBased'),
                                 ('pfRelIso03_all', 'Electron_pfRelIso03_all'),
-                                ('dxy', 'Electron_dxy'), ('dz', 'Electron_dz'),
-                                ('mass', 'Electron_mass')]:
+                                ('miniPFRelIso_chg', 'Electron_miniPFRelIso_chg')]:
                 v = _safe(ev, branch)
                 if v is not None:
                     cms[key][i, :n] = ak.to_numpy(v)[si]
@@ -389,13 +307,13 @@ class CMSNanoAODConverter:
         n_events = len(events)
         mx = self.config.max_objects
         c = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['pt', 'eta', 'phi', 'charge', 'trk_iso03']}
+             for k in ['pt', 'eta', 'phi', 'charge']}
         c['n'] = np.zeros(n_events, dtype=np.int32)
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
         cms = {k: np.zeros((n_events, mx), dtype=np.float32)
                for k in ['looseId', 'mediumId', 'tightId',
-                         'pfRelIso03_all', 'pfRelIso04_all', 'dxy', 'dz']}
+                         'pfRelIso03_all', 'miniPFRelIso_chg']}
 
         for i, ev in enumerate(events):
             pt = _safe(ev, "Muon_pt")
@@ -404,11 +322,11 @@ class CMSNanoAODConverter:
             pt_np = ak.to_numpy(pt)
             eta_np = ak.to_numpy(ev["Muon_eta"])
 
-            pm = (pt_np > self.config.muon_pt_cut) & (np.abs(eta_np) < self.config.muon_eta_cut)
+            pm = np.isfinite(pt_np) & (pt_np > self.config.muon_pt_cut) & (np.abs(eta_np) < self.config.muon_eta_cut)
             if self.config.muon_require_loose:
                 lid = _safe(ev, "Muon_looseId")
                 if lid is not None:
-                    pm = pm & (ak.to_numpy(lid) > 0)
+                    pm = pm & (ak.to_numpy(lid) == 1)
 
             idx = np.where(pm)[0]
             n = min(len(idx), mx)
@@ -421,8 +339,6 @@ class CMSNanoAODConverter:
             c['phi'][i, :n]    = ak.to_numpy(ev["Muon_phi"])[si]
             ch = _safe(ev, "Muon_charge")
             if ch is not None: c['charge'][i, :n] = ak.to_numpy(ch)[si]
-            iso = _safe(ev, "Muon_pfRelIso03_all")
-            if iso is not None: c['trk_iso03'][i, :n] = ak.to_numpy(iso)[si]
             c['n'][i] = n
             c['mask'][i, :n] = True
 
@@ -430,8 +346,7 @@ class CMSNanoAODConverter:
                                 ('mediumId', 'Muon_mediumId'),
                                 ('tightId', 'Muon_tightId'),
                                 ('pfRelIso03_all', 'Muon_pfRelIso03_all'),
-                                ('pfRelIso04_all', 'Muon_pfRelIso04_all'),
-                                ('dxy', 'Muon_dxy'), ('dz', 'Muon_dz')]:
+                                ('miniPFRelIso_chg', 'Muon_miniPFRelIso_chg')]:
                 v = _safe(ev, branch)
                 if v is not None:
                     cms[key][i, :n] = ak.to_numpy(v)[si]
@@ -442,13 +357,12 @@ class CMSNanoAODConverter:
         n_events = len(events)
         mx = self.config.max_objects
         c = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['pt', 'eta', 'phi', 'trk_iso03']}
+             for k in ['pt', 'eta', 'phi']}
         c['n'] = np.zeros(n_events, dtype=np.int32)
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
         cms = {k: np.zeros((n_events, mx), dtype=np.float32)
-               for k in ['cutBased', 'mvaID', 'mvaID_WP80', 'mvaID_WP90',
-                         'pfRelIso03_all']}
+               for k in ['cutBased', 'mvaID', 'electronVeto', 'pfRelIso03_all', 'pfRelIso03_chg']}
 
         for i, ev in enumerate(events):
             pt = _safe(ev, "Photon_pt")
@@ -457,7 +371,10 @@ class CMSNanoAODConverter:
             pt_np = ak.to_numpy(pt)
             eta_np = ak.to_numpy(ev["Photon_eta"])
 
-            pm = (pt_np > self.config.photon_pt_cut) & (np.abs(eta_np) < self.config.photon_eta_cut)
+            abs_eta = np.abs(eta_np)
+            pm = np.isfinite(pt_np) & (pt_np > self.config.photon_pt_cut) & (abs_eta < self.config.photon_eta_cut)
+            pm = pm & ((abs_eta < 1.37) | (abs_eta > 1.52))
+            pm = pm & (ak.to_numpy(ev["Photon_electronVeto"]) == 1)
             if self.config.photon_min_cutbased > 0:
                 cb = _safe(ev, "Photon_cutBased")
                 if cb is not None:
@@ -472,15 +389,13 @@ class CMSNanoAODConverter:
             c['pt'][i, :n]  = pt_np[si]
             c['eta'][i, :n] = eta_np[si]
             c['phi'][i, :n] = ak.to_numpy(ev["Photon_phi"])[si]
-            iso = _safe(ev, "Photon_pfRelIso03_all")
-            if iso is not None: c['trk_iso03'][i, :n] = ak.to_numpy(iso)[si]
             c['n'][i] = n
             c['mask'][i, :n] = True
 
             for key, branch in [('cutBased', 'Photon_cutBased'),
                                 ('mvaID', 'Photon_mvaID'),
-                                ('mvaID_WP80', 'Photon_mvaID_WP80'),
-                                ('mvaID_WP90', 'Photon_mvaID_WP90'),
+                                ('electronVeto', 'Photon_electronVeto'),
+                                ('pfRelIso03_chg', 'Photon_pfRelIso03_chg'),
                                 ('pfRelIso03_all', 'Photon_pfRelIso03_all')]:
                 v = _safe(ev, branch)
                 if v is not None:
@@ -492,7 +407,7 @@ class CMSNanoAODConverter:
         n_events = len(events)
         mx = self.config.max_objects
         c = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['pt', 'eta', 'phi', 'charge', 'is_1prong']}
+             for k in ['pt', 'eta', 'phi', 'charge']}
         c['n'] = np.zeros(n_events, dtype=np.int32)
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
@@ -508,18 +423,14 @@ class CMSNanoAODConverter:
             pt_np = ak.to_numpy(pt)
             eta_np = ak.to_numpy(ev["Tau_eta"])
 
-            pm = (pt_np > self.config.tau_pt_cut) & (np.abs(eta_np) < self.config.tau_eta_cut)
+            abs_eta = np.abs(eta_np)
+            pm = np.isfinite(pt_np) & (pt_np > self.config.tau_pt_cut) & (abs_eta < self.config.tau_eta_cut)
+            pm = pm & ~((abs_eta > 1.37) & (abs_eta < 1.52))
+            pm = pm & (np.abs(ak.to_numpy(ev["Tau_charge"])) == 1)
             if self.config.tau_min_deeptau_vsjet > 0:
                 dt = _safe(ev, "Tau_idDeepTau2017v2p1VSjet")
                 if dt is not None:
-                    pm = pm & (ak.to_numpy(dt) >= self.config.tau_min_deeptau_vsjet)
-
-            # Extra tau gap and charge cuts to confirm w/ CMS.
-            # abs_eta = np.abs(eta_np)
-            # pm = pm & ~((abs_eta > 1.37) & (abs_eta < 1.52))
-            # charge = _safe(ev, "Tau_charge")
-            # if charge is not None:
-            #     pm = pm & (np.abs(ak.to_numpy(charge)) == 1)
+                    pm = pm & ((ak.to_numpy(dt) & self.config.tau_min_deeptau_vsjet) == self.config.tau_min_deeptau_vsjet)
 
             idx = np.where(pm)[0]
             n = min(len(idx), mx)
@@ -532,10 +443,6 @@ class CMSNanoAODConverter:
             c['phi'][i, :n]  = ak.to_numpy(ev["Tau_phi"])[si]
             ch = _safe(ev, "Tau_charge")
             if ch is not None: c['charge'][i, :n] = ak.to_numpy(ch)[si]
-            dm = _safe(ev, "Tau_decayMode")
-            if dm is not None:
-                dm_np = ak.to_numpy(dm)[si]
-                c['is_1prong'][i, :n] = (dm_np <= 2).astype(np.float32)
             c['n'][i] = n
             c['mask'][i, :n] = True
 
@@ -554,13 +461,13 @@ class CMSNanoAODConverter:
         n_events = len(events)
         mx = self.config.max_objects
         c = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['pt', 'eta', 'phi', 'mass', 'n_trk']}
+             for k in ['pt', 'eta', 'phi', 'mass']}
         c['n'] = np.zeros(n_events, dtype=np.int32)
         c['mask'] = np.zeros((n_events, mx), dtype=bool)
 
         cms = {k: np.zeros((n_events, mx), dtype=np.float32)
-               for k in ['btagDeepFlavB', 'btagDeepFlavC', 'btagDeepFlavQG',
-                         'jetId', 'puId', 'qgl', 'nConstituents', 'nMuons']}
+               for k in ['btagDeepFlavB', 'btagDeepFlavCvL', 'btagDeepFlavCvB',
+                         'btagDeepFlavQG', 'jetId', 'nConstituents']}
 
         for i, ev in enumerate(events):
             pt = _safe(ev, "Jet_pt")
@@ -569,11 +476,11 @@ class CMSNanoAODConverter:
             pt_np = ak.to_numpy(pt)
             eta_np = ak.to_numpy(ev["Jet_eta"])
 
-            pm = (pt_np > self.config.jet_pt_cut) & (np.abs(eta_np) < self.config.jet_eta_cut)
+            pm = np.isfinite(pt_np) & (pt_np > self.config.jet_pt_cut) & (np.abs(eta_np) < self.config.jet_eta_cut)
             if self.config.jet_min_id > 0:
                 jid = _safe(ev, "Jet_jetId")
                 if jid is not None:
-                    pm = pm & (ak.to_numpy(jid) >= self.config.jet_min_id)
+                    pm = pm & ((ak.to_numpy(jid) & self.config.jet_min_id) == self.config.jet_min_id)
 
             idx = np.where(pm)[0]
             n = min(len(idx), mx)
@@ -586,161 +493,32 @@ class CMSNanoAODConverter:
             c['phi'][i, :n]  = ak.to_numpy(ev["Jet_phi"])[si]
             m = _safe(ev, "Jet_mass")
             if m is not None: c['mass'][i, :n] = ak.to_numpy(m)[si]
-            nc = _safe(ev, "Jet_nConstituents")
-            if nc is not None: c['n_trk'][i, :n] = ak.to_numpy(nc)[si]
             c['n'][i] = n
             c['mask'][i, :n] = True
 
             for key, branch in [('btagDeepFlavB', 'Jet_btagDeepFlavB'),
-                                ('btagDeepFlavC', 'Jet_btagDeepFlavC'),
+                                ('btagDeepFlavCvL', 'Jet_btagDeepFlavCvL'),
+                                ('btagDeepFlavCvB', 'Jet_btagDeepFlavCvB'),
                                 ('btagDeepFlavQG', 'Jet_btagDeepFlavQG'),
-                                ('jetId', 'Jet_jetId'), ('puId', 'Jet_puId'),
-                                ('qgl', 'Jet_qgl'),
-                                ('nConstituents', 'Jet_nConstituents'),
-                                ('nMuons', 'Jet_nMuons')]:
+                                ('jetId', 'Jet_jetId'),
+                                ('nConstituents', 'Jet_nConstituents')]:
                 v = _safe(ev, branch)
                 if v is not None:
                     cms[key][i, :n] = ak.to_numpy(v)[si]
 
         return {'common': c, 'cms': cms}
 
-    def _process_pfcands(self, events) -> Dict:
-        """Process PFCands from PFNano into cms/pfcands (all PFCands, charged + neutral)."""
-        logger.info("Processing PFCands...")
-        n_events = len(events)
-        mx = self.config.max_pfcands
-
-        cms = {k: np.zeros((n_events, mx), dtype=np.float32)
-               for k in ['pt', 'eta', 'phi', 'mass', 'charge', 'pdgId',
-                          'd0', 'dz', 'puppiWeight', 'trkChi2', 'trkQuality']}
-        cms['n'] = np.zeros(n_events, dtype=np.int32)
-        cms['mask'] = np.zeros((n_events, mx), dtype=bool)
-
-        for i, ev in enumerate(events):
-            pt = _safe(ev, "PFCands_pt")
-            if pt is None:
-                continue
-            pt_np = ak.to_numpy(pt)
-
-            pm = pt_np > self.config.pfcand_pt_cut_all
-            idx = np.where(pm)[0]
-            n = min(len(idx), mx)
-            if n == 0:
-                continue
-            si = idx[np.argsort(pt_np[idx])[::-1][:n]]
-
-            cms['pt'][i, :n]  = pt_np[si]
-            cms['eta'][i, :n] = ak.to_numpy(ev["PFCands_eta"])[si]
-            cms['phi'][i, :n] = ak.to_numpy(ev["PFCands_phi"])[si]
-            cms['n'][i] = n
-            cms['mask'][i, :n] = True
-
-            for key, branch in [('mass', 'PFCands_mass'),
-                                ('charge', 'PFCands_charge'),
-                                ('pdgId', 'PFCands_pdgId'),
-                                ('d0', 'PFCands_d0'), ('dz', 'PFCands_dz'),
-                                ('puppiWeight', 'PFCands_puppiWeight'),
-                                ('trkChi2', 'PFCands_trkChi2'),
-                                ('trkQuality', 'PFCands_trkQuality')]:
-                v = _safe(ev, branch)
-                if v is not None:
-                    cms[key][i, :n] = ak.to_numpy(v)[si]
-
-        logger.info(f"  PFCands: avg {cms['n'].mean():.0f} per event (max_pfcands={mx})")
-        return {'cms': cms}
-
-    def _process_tracks(self, events) -> Dict:
-        """Fill common/tracks from charged PFCands (PFNano) or leave empty (NanoAOD)."""
-        n_events = len(events)
-        mx = self.config.max_tracks
-        c = {k: np.zeros((n_events, mx), dtype=np.float32)
-             for k in ['pt', 'eta', 'phi', 'd0', 'z0']}
-        c['n'] = np.zeros(n_events, dtype=np.int32)
-        c['mask'] = np.zeros((n_events, mx), dtype=bool)
-
-        if "nPFCands" not in events.fields:
-            return {'common': c, 'cms': {}}
-
-        logger.info("Filling common/tracks from charged PFCands...")
-        for i, ev in enumerate(events):
-            pt = _safe(ev, "PFCands_pt")
-            if pt is None:
-                continue
-            pt_np = ak.to_numpy(pt)
-            ch = _safe(ev, "PFCands_charge")
-            if ch is None:
-                continue
-            ch_np = ak.to_numpy(ch)
-
-            pm = (pt_np > self.config.pfcand_pt_cut) & (ch_np != 0)
-            idx = np.where(pm)[0]
-            n = min(len(idx), mx)
-            if n == 0:
-                continue
-            si = idx[np.argsort(pt_np[idx])[::-1][:n]]
-
-            c['pt'][i, :n]  = pt_np[si]
-            c['eta'][i, :n] = ak.to_numpy(ev["PFCands_eta"])[si]
-            c['phi'][i, :n] = ak.to_numpy(ev["PFCands_phi"])[si]
-            d0 = _safe(ev, "PFCands_d0")
-            if d0 is not None: c['d0'][i, :n] = ak.to_numpy(d0)[si]
-            dz = _safe(ev, "PFCands_dz")
-            if dz is not None: c['z0'][i, :n] = ak.to_numpy(dz)[si]
-            c['n'][i] = n
-            c['mask'][i, :n] = True
-
-        logger.info(f"  Tracks (charged PFCands): avg {c['n'].mean():.0f} per event")
-        return {'common': c, 'cms': {}}
-
-    def _process_met(self, events) -> Dict:
+    def _process_event_info(self, events, is_mc) -> Dict:
         n_events = len(events)
         c = {
-            'pt':    np.zeros(n_events, dtype=np.float32),
-            'phi':   np.zeros(n_events, dtype=np.float32),
-            'sumet': np.zeros(n_events, dtype=np.float32),
-        }
-        met_pt = _safe(events, "MET_pt")
-        if met_pt is not None:
-            c['pt'] = ak.to_numpy(met_pt).astype(np.float32)
-        met_phi = _safe(events, "MET_phi")
-        if met_phi is not None:
-            c['phi'] = ak.to_numpy(met_phi).astype(np.float32)
-        met_sumet = _safe(events, "MET_sumEt")
-        if met_sumet is not None:
-            c['sumet'] = ak.to_numpy(met_sumet).astype(np.float32)
-        return c
-
-    def _process_event_info(self, events) -> Dict:
-        n_events = len(events)
-        c = {
-            'pvx':           np.zeros(n_events, dtype=np.float32),
-            'pvy':           np.zeros(n_events, dtype=np.float32),
-            'pvz':           np.zeros(n_events, dtype=np.float32),
-            'mu':            np.zeros(n_events, dtype=np.float32),
             'experiment_id': np.ones(n_events, dtype=np.int32) * EXPERIMENT_ID,
-            'is_simulation': np.zeros(n_events, dtype=np.int32),
+            'is_simulation': np.full(n_events, is_mc, dtype=np.int32),
         }
         cms_ev = {
             'event':            np.zeros(n_events, dtype=np.int64),
             'run':              np.zeros(n_events, dtype=np.int32),
             'luminosityBlock':  np.zeros(n_events, dtype=np.int32),
         }
-
-        # PV
-        for key, branch in [('pvx', 'PV_x'), ('pvy', 'PV_y'), ('pvz', 'PV_z')]:
-            v = _safe(events, branch)
-            if v is not None:
-                c[key] = ak.to_numpy(v).astype(np.float32)
-
-        # Pileup (MC) or nPVGood (data proxy)
-        pu = _safe(events, "Pileup_nTrueInt")
-        if pu is not None:
-            c['mu'] = ak.to_numpy(pu).astype(np.float32)
-            c['is_simulation'] = np.ones(n_events, dtype=np.int32)
-        else:
-            npv = _safe(events, "PV_npvsGood")
-            if npv is not None:
-                c['mu'] = ak.to_numpy(npv).astype(np.float32)
 
         # Event IDs
         for key, branch in [('event', 'event'), ('run', 'run'),
@@ -750,139 +528,6 @@ class CMSNanoAODConverter:
                 cms_ev[key] = ak.to_numpy(v)
 
         return {'common': c, 'cms': cms_ev}
-
-    def _process_truth(self, events) -> Dict:
-        """Process GenPart, GenJet, GenMET."""
-        logger.info("Processing truth (GenPart)...")
-        n_events = len(events)
-        mx = self.config.max_objects
-
-        truth = {}
-
-        # Extract specific truth particles from GenPart by pdgId
-        # statusFlags bit 13 = isLastCopy
-        truth_types = {
-            'electrons': 11,
-            'muons':     13,
-            'taus':      15,
-        }
-
-        for obj_name, abs_pdg in truth_types.items():
-            d = {
-                'pt':     np.zeros((n_events, mx), dtype=np.float32),
-                'eta':    np.zeros((n_events, mx), dtype=np.float32),
-                'phi':    np.zeros((n_events, mx), dtype=np.float32),
-                'mass':   np.zeros((n_events, mx), dtype=np.float32),
-                'pdgId':  np.zeros((n_events, mx), dtype=np.int32),
-                'status': np.zeros((n_events, mx), dtype=np.int32),
-                'n':      np.zeros(n_events, dtype=np.int32),
-                'mask':   np.zeros((n_events, mx), dtype=bool),
-            }
-
-            for i, ev in enumerate(events):
-                pt = _safe(ev, "GenPart_pt")
-                if pt is None:
-                    continue
-                pt_np = ak.to_numpy(pt)
-                pdg_np = ak.to_numpy(ev["GenPart_pdgId"])
-                sf_np = ak.to_numpy(ev["GenPart_statusFlags"])
-
-                # Select: correct pdgId AND isLastCopy (bit 13)
-                sel = (np.abs(pdg_np) == abs_pdg) & ((sf_np & (1 << 13)) > 0)
-                idx = np.where(sel)[0]
-                n = min(len(idx), mx)
-                if n == 0:
-                    continue
-                si = idx[np.argsort(pt_np[idx])[::-1][:n]]
-
-                d['pt'][i, :n]     = pt_np[si]
-                d['eta'][i, :n]    = ak.to_numpy(ev["GenPart_eta"])[si]
-                d['phi'][i, :n]    = ak.to_numpy(ev["GenPart_phi"])[si]
-                d['mass'][i, :n]   = ak.to_numpy(ev["GenPart_mass"])[si]
-                d['pdgId'][i, :n]  = pdg_np[si]
-                d['status'][i, :n] = ak.to_numpy(ev["GenPart_status"])[si]
-                d['n'][i] = n
-                d['mask'][i, :n] = True
-
-            truth[obj_name] = d
-            logger.info(f"  Truth {obj_name}: avg {d['n'].mean():.1f} per event")
-
-        # Truth bosons (H=25, Z=23, W=24) from GenPart
-        d = {
-            'pt':     np.zeros((n_events, 5), dtype=np.float32),
-            'eta':    np.zeros((n_events, 5), dtype=np.float32),
-            'phi':    np.zeros((n_events, 5), dtype=np.float32),
-            'mass':   np.zeros((n_events, 5), dtype=np.float32),
-            'pdgId':  np.zeros((n_events, 5), dtype=np.int32),
-            'status': np.zeros((n_events, 5), dtype=np.int32),
-            'n':      np.zeros(n_events, dtype=np.int32),
-            'mask':   np.zeros((n_events, 5), dtype=bool),
-        }
-        for i, ev in enumerate(events):
-            pt = _safe(ev, "GenPart_pt")
-            if pt is None:
-                continue
-            pt_np = ak.to_numpy(pt)
-            pdg_np = ak.to_numpy(ev["GenPart_pdgId"])
-            sf_np = ak.to_numpy(ev["GenPart_statusFlags"])
-            sel = (np.isin(np.abs(pdg_np), [23, 24, 25])) & ((sf_np & (1 << 13)) > 0)
-            idx = np.where(sel)[0]
-            n = min(len(idx), 5)
-            if n == 0:
-                continue
-            si = idx[np.argsort(pt_np[idx])[::-1][:n]]
-            d['pt'][i, :n]     = pt_np[si]
-            d['eta'][i, :n]    = ak.to_numpy(ev["GenPart_eta"])[si]
-            d['phi'][i, :n]    = ak.to_numpy(ev["GenPart_phi"])[si]
-            d['mass'][i, :n]   = ak.to_numpy(ev["GenPart_mass"])[si]
-            d['pdgId'][i, :n]  = pdg_np[si]
-            d['status'][i, :n] = ak.to_numpy(ev["GenPart_status"])[si]
-            d['n'][i] = n
-            d['mask'][i, :n] = True
-        truth['bosons'] = d
-        logger.info(f"  Truth bosons: avg {d['n'].mean():.1f} per event")
-
-        # GenJets
-        if "nGenJet" in events.fields:
-            d = {
-                'pt':   np.zeros((n_events, mx), dtype=np.float32),
-                'eta':  np.zeros((n_events, mx), dtype=np.float32),
-                'phi':  np.zeros((n_events, mx), dtype=np.float32),
-                'mass': np.zeros((n_events, mx), dtype=np.float32),
-                'n':    np.zeros(n_events, dtype=np.int32),
-                'mask': np.zeros((n_events, mx), dtype=bool),
-            }
-            for i, ev in enumerate(events):
-                pt = _safe(ev, "GenJet_pt")
-                if pt is None:
-                    continue
-                pt_np = ak.to_numpy(pt)
-                pm = pt_np > 20.0  # 20 GeV truth jet cut
-                pt_np = pt_np[pm]
-                n = min(len(pt_np), mx)
-                if n == 0:
-                    continue
-                si = np.argsort(pt_np)[::-1][:n]
-                d['pt'][i, :n]   = pt_np[si]
-                d['eta'][i, :n]  = ak.to_numpy(_safe(ev, "GenJet_eta"))[pm][si]
-                d['phi'][i, :n]  = ak.to_numpy(_safe(ev, "GenJet_phi"))[pm][si]
-                m = _safe(ev, "GenJet_mass")
-                if m is not None:
-                    d['mass'][i, :n] = ak.to_numpy(m)[pm][si]
-                d['n'][i] = n
-                d['mask'][i, :n] = True
-            truth['jets'] = d
-            logger.info(f"  Truth jets: avg {d['n'].mean():.1f} per event")
-
-        # GenMET
-        if "GenMET_pt" in events.fields:
-            truth['met'] = {
-                'pt':  ak.to_numpy(events["GenMET_pt"]).astype(np.float32),
-                'phi': ak.to_numpy(events["GenMET_phi"]).astype(np.float32),
-            }
-            logger.info(f"  Truth MET: avg {truth['met']['pt'].mean():.1f} GeV")
-
-        return truth
 
     # ── HDF5 writer ───────────────────────────────────────────────────────
 
@@ -895,14 +540,10 @@ class CMSNanoAODConverter:
 
             # /common
             grp_c = f.create_group('common')
-            for obj in ['electrons', 'muons', 'photons', 'taus', 'jets', 'tracks']:
+            for obj in ['electrons', 'muons', 'photons', 'taus', 'jets']:
                 sub = grp_c.create_group(obj)
                 for key, arr in data[obj]['common'].items():
                     sub.create_dataset(key, data=arr, compression='gzip', compression_opts=4)
-
-            grp_met = grp_c.create_group('met')
-            for key, arr in data['met'].items():
-                grp_met.create_dataset(key, data=arr, compression='gzip')
 
             grp_ev = grp_c.create_group('event')
             for key, arr in data['event_info']['common'].items():
@@ -916,29 +557,9 @@ class CMSNanoAODConverter:
                     for key, arr in data[obj]['cms'].items():
                         sub.create_dataset(key, data=arr, compression='gzip', compression_opts=4)
 
-            if data.get('pfcands') and data['pfcands'].get('cms'):
-                sub = grp_x.create_group('pfcands')
-                for key, arr in data['pfcands']['cms'].items():
-                    sub.create_dataset(key, data=arr, compression='gzip', compression_opts=4)
-
             grp_xev = grp_x.create_group('event')
             for key, arr in data['event_info']['cms'].items():
                 grp_xev.create_dataset(key, data=arr, compression='gzip')
-
-            # /truth
-            if 'truth' in data and data['truth']:
-                grp_t = f.create_group('truth')
-                for obj_name, obj_dict in data['truth'].items():
-                    if obj_name == 'met':
-                        sub = grp_t.create_group('met')
-                        for key, arr in obj_dict.items():
-                            sub.create_dataset(key, data=arr, compression='gzip')
-                    else:
-                        sub = grp_t.create_group(obj_name)
-                        for key, arr in obj_dict.items():
-                            sub.create_dataset(key, data=arr, compression='gzip',
-                                               compression_opts=4)
-                logger.info(f"  Truth groups: {list(data['truth'].keys())}")
 
             # /metadata
             meta = f.create_group('metadata')
@@ -990,9 +611,9 @@ def main():
     parser.add_argument('input_files', nargs='+', help='Input NanoAOD ROOT files')
     parser.add_argument('-o', '--output', required=True, help='Output HDF5 file')
     parser.add_argument('--max-events', type=int, default=None)
-    parser.add_argument('--electron-pt-cut', type=float, default=7.0)
-    parser.add_argument('--muon-pt-cut', type=float, default=5.0)
-    parser.add_argument('--jet-pt-cut', type=float, default=30.0)
+    parser.add_argument('--electron-pt-cut', type=float, default=10.0)
+    parser.add_argument('--muon-pt-cut', type=float, default=10.0)
+    parser.add_argument('--jet-pt-cut', type=float, default=20.0)
     args = parser.parse_args()
 
     cfg = CMSObjectConfig(

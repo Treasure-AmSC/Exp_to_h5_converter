@@ -65,17 +65,17 @@ environment:
 python cms_nanoaod_to_h5_converter.py input.root -o output.h5
 ```
 
-The same command works for data and MC, using either NanoAOD or PFNano inputs.
-It reads the whole ROOT file. Use a new output filename: an existing H5 will
-be overwritten.
+The converter uses the five collections' CMS study features and object
+cuts, with the study event-cleaning flags applied to MC. The original
+padded layout (up to 20 objects per collection), metadata and weight
+sums are unchanged. PF candidates are ignored even when present; tracks
+and generator particles are not exported. There is no benchmark-specific
+event selection in the converter.
 
-MC generator weights are saved under `cms/event`. The sumw and sumw2 of the
-events written to the H5 are saved in `metadata`; no cross-section or luminosity
-normalization is applied.
-The commented certification, cleaning and extra tau cuts still need to be
-confirmed with CMS before use.
+The existing electron, muon and jet pT options default to the study
+thresholds of 10, 10 and 20 GeV. As before, an existing output file is overwritten.
 
-### How we made the sample files
+### Earlier review sample files
 
 - `CMS_Tau_data_pfnano.h5`: converted one complete Tau PFNano ROOT file from
   [CMS record 31315](https://opendata.cern.ch/record/31315).
@@ -85,6 +85,6 @@ confirmed with CMS before use.
   existing ATLAS H5 collection.
 - `ATLAS_mc_DAOD_PHYSLITE.37620644._000012.pool.root.h5`: ttbar, DSID 410470.
 
-The Tau PFNano file contains PF candidates;
-the TTTo2L2Nu NanoAOD file does not, so its track arrays are empty.
+These samples were produced with the earlier review converter. Its Tau
+PFNano output included PF candidates; the TTTo2L2Nu output had empty track arrays.
 
